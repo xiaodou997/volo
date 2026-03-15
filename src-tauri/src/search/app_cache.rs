@@ -316,25 +316,48 @@ fn scan_apps() -> Result<Vec<AppInfo>> {
     Ok(Vec::new())
 }
 
-// ============ 拼音生成（简化版） ============
+// ============ 拼音生成 ============
 
-/// 生成拼音（简化版，仅处理常见中文）
-/// TODO: 引入 pinyin crate 实现完整拼音转换
+/// 生成拼音（支持中文）
 fn generate_pinyin(name: &str) -> String {
-    // 简化实现：保留原始名称，后续可引入拼音库
-    name.to_lowercase()
+    use pinyin::ToPinyin;
+
+    let mut result = String::new();
+
+    for c in name.chars() {
+        if let Some(pinyin) = c.to_pinyin() {
+            // 拼音不带声调
+            result.push_str(pinyin.plain());
+        } else if c.is_ascii_alphabetic() {
+            result.push(c.to_ascii_lowercase());
+        } else if c.is_ascii_digit() {
+            result.push(c);
+        }
+        // 忽略其他字符
+    }
+
+    result
 }
 
-/// 生成首字母（简化版）
+/// 生成首字母（支持中文）
 fn generate_initials(name: &str) -> String {
-    let mut initials = String::new();
+    use pinyin::ToPinyin;
+
+    let mut result = String::new();
+
     for c in name.chars() {
-        if c.is_ascii_alphabetic() {
-            initials.push(c.to_ascii_lowercase());
+        if let Some(pinyin) = c.to_pinyin() {
+            // 取拼音首字母
+            if let Some(first) = pinyin.plain().chars().next() {
+                result.push(first);
+            }
+        } else if c.is_ascii_alphabetic() {
+            result.push(c.to_ascii_lowercase());
         }
-        // TODO: 处理中文字符的首字母
+        // 忽略数字和其他字符
     }
-    initials
+
+    result
 }
 
 // ============ Tauri Commands ============
@@ -351,15 +374,55 @@ pub fn get_app_count(cache: tauri::State<'_, AppCache>) -> usize {
     cache.count()
 }
 
-/// 获取应用图标
+/// 获取应用图标（带缓存）
 #[cfg(target_os = "macos")]
 #[tauri::command]
-pub fn get_app_icon(path: String) -> Result<Option<String>> {
-    crate::platform::macos::get_app_icon(&path)
+pub fn get_app_icon(path: String, cache: tauri::State<'_, AppCache>) -> Result<Option<String>> {
+    // 先从内存缓存获取
+    {
+        let data = cache.data.read()
+            .map_err(|_| VoloError::Other("Lock error".to_string()))?;
+
+        for app in &data.apps {
+            if app.path == path {
+                if let Some(ref icon) = app.icon {
+                    if !icon.is_empty() {
+                        return Ok(Some(icon.clone()));
+                    }
+                }
+                break;
+            }
+        }
+    }
+
+    // 从数据库缓存获取
+    let db = Connection::open(&cache.db_path)?;
+    let cached_icon: Option<String> = db.query_row(
+        "SELECT icon FROM apps WHERE path = ?1 AND icon IS NOT NULL AND icon != ''",
+        params![&path],
+        |row| row.get(0),
+    ).ok().flatten();
+
+    if let Some(icon) = cached_icon {
+        return Ok(Some(icon));
+    }
+
+    // 提取图标
+    let icon = crate::platform::macos::get_app_icon(&path)?;
+
+    // 缓存到数据库
+    if let Some(ref icon_data) = icon {
+        let _ = db.execute(
+            "UPDATE apps SET icon = ?1 WHERE path = ?2",
+            params![icon_data, &path],
+        );
+    }
+
+    Ok(icon)
 }
 
 #[cfg(not(target_os = "macos"))]
 #[tauri::command]
-pub fn get_app_icon(_path: String) -> Result<Option<String>> {
+pub fn get_app_icon(_path: String, _cache: tauri::State<'_, AppCache>) -> Result<Option<String>> {
     Ok(None)
 }

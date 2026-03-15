@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Hello World</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      padding: 20px;
+      background: var(--bg-primary, #fff);
+      color: var(--text-primary, #1d1d1f);
+      min-height: 300px;
+    }
+
+    .container {
+      max-width: 100%;
+    }
+
+    h1 {
+      font-size: 24px;
+      margin-bottom: 16px;
+      color: var(--text-primary, #1d1d1f);
+    }
+
+    p {
+      font-size: 14px;
+      color: var(--text-secondary, #6e6e73);
+      margin-bottom: 12px;
+    }
+
+    .time {
+      font-size: 32px;
+      font-weight: 600;
+      color: var(--accent-color, #007aff);
+      margin: 20px 0;
+    }
+
+    .btn {
+      display: inline-block;
+      padding: 8px 16px;
+      background: var(--accent-color, #007aff);
+      color: white;
+      border: none;
+      border-radius: 6px;
+      font-size: 14px;
+      cursor: pointer;
+      margin-right: 8px;
+      margin-bottom: 8px;
+    }
+
+    .btn:hover {
+      opacity: 0.9;
+    }
+
+    .btn-secondary {
+      background: var(--bg-secondary, #f5f5f7);
+      color: var(--text-primary, #1d1d1f);
+    }
+
+    .message {
+      margin-top: 16px;
+      padding: 12px;
+      background: var(--bg-secondary, #f5f5f7);
+      border-radius: 8px;
+      font-size: 14px;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg-primary: #1c1c1e;
+        --bg-secondary: #2c2c2e;
+        --text-primary: #f5f5f7;
+        --text-secondary: #a1a1a6;
+        --accent-color: #0a84ff;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>👋 Hello World</h1>
+    <p>这是一个 Volo 示例插件</p>
+
+    <div class="time" id="time"></div>
+
+    <div>
+      <button class="btn" onclick="copyMessage()">复制消息</button>
+      <button class="btn btn-secondary" onclick="showNotification()">发送通知</button>
+      <button class="btn btn-secondary" onclick="exitPlugin()">退出插件</button>
+    </div>
+
+    <div class="message" id="message"></div>
+  </div>
+
+  <script>
+    // 更新时间
+    function updateTime() {
+      const now = new Date();
+      const timeStr = now.toLocaleTimeString('zh-CN', {
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit'
+      });
+      document.getElementById('time').textContent = timeStr;
+    }
+
+    // 初始化
+    updateTime();
+    setInterval(updateTime, 1000);
+
+    // 生命周期钩子
+    if (window.rubick) {
+      window.rubick.onPluginEnter = function(data) {
+        console.log('onPluginEnter:', data);
+        showMessage('进入插件，查询: ' + (data.query || '(空)'));
+      };
+
+      window.rubick.onPluginOut = function() {
+        console.log('onPluginOut');
+      };
+    }
+
+    // 复制消息
+    async function copyMessage() {
+      if (window.rubick) {
+        await window.rubick.clipboard.writeText('Hello from Volo Plugin!');
+        showMessage('已复制到剪贴板！');
+      } else {
+        showMessage('rubick API 不可用');
+      }
+    }
+
+    // 发送通知
+    async function showNotification() {
+      if (window.rubick) {
+        await window.rubick.notification.show({
+          title: 'Volo 插件',
+          body: 'Hello from Hello World 插件！'
+        });
+        showMessage('通知已发送！');
+      } else {
+        showMessage('rubick API 不可用');
+      }
+    }
+
+    // 退出插件
+    function exitPlugin() {
+      if (window.rubick) {
+        window.rubick.window.hide();
+      }
+      // 通知父窗口退出
+      window.parent.postMessage({ type: 'pluginExit' }, '*');
+    }
+
+    // 显示消息
+    function showMessage(msg) {
+      document.getElementById('message').textContent = msg;
+    }
+  </script>
+</body>
+</html>

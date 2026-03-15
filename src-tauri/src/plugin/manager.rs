@@ -2,6 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fs;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::{AppHandle, Manager};
@@ -15,8 +16,10 @@ pub struct Plugin {
     pub id: String,
     pub name: String,
     pub version: String,
+    #[serde(default)]
     pub main: String,
     pub path: PathBuf,
+    #[serde(default)]
     pub features: Vec<Feature>,
     #[serde(default)]
     pub permissions: Vec<String>,
@@ -31,6 +34,7 @@ pub struct Plugin {
 pub struct Feature {
     pub id: String,
     pub name: String,
+    #[serde(default)]
     pub keywords: Vec<String>,
     #[serde(default)]
     pub icon: Option<String>,
@@ -104,6 +108,63 @@ impl PluginState {
         let plugins = self.plugins.lock().ok()?;
         plugins.get(id).cloned()
     }
+
+    /// 安装插件（从本地目录）
+    pub fn install_from_dir(&self, source_dir: &PathBuf) -> Result<Plugin> {
+        // 验证源目录
+        if !source_dir.exists() {
+            return Err(VoloError::Other(format!("Source directory not found: {:?}", source_dir)));
+        }
+
+        // 加载插件信息
+        let plugin = load_plugin_from_dir(source_dir)?;
+
+        // 检查是否已安装
+        let target_dir = self.plugins_dir.join(&plugin.id);
+        if target_dir.exists() {
+            // 删除旧版本
+            fs::remove_dir_all(&target_dir)?;
+        }
+
+        // 创建目标目录
+        fs::create_dir_all(&target_dir)?;
+
+        // 复制所有文件
+        copy_dir_all(source_dir, &target_dir)?;
+
+        // 更新内存缓存
+        let mut plugins = self.plugins.lock()
+            .map_err(|_| VoloError::Other("Lock error".to_string()))?;
+
+        let installed_plugin = Plugin {
+            path: target_dir.clone(),
+            ..plugin
+        };
+
+        plugins.insert(installed_plugin.id.clone(), installed_plugin.clone());
+
+        info!("Installed plugin: {} ({})", installed_plugin.name, installed_plugin.id);
+        Ok(installed_plugin)
+    }
+
+    /// 卸载插件
+    pub fn uninstall(&self, id: &str) -> Result<()> {
+        let plugin = self.get_plugin(id)
+            .ok_or_else(|| VoloError::NotFound(id.to_string()))?;
+
+        // 删除插件目录
+        if plugin.path.exists() {
+            fs::remove_dir_all(&plugin.path)?;
+        }
+
+        // 从内存缓存移除
+        let mut plugins = self.plugins.lock()
+            .map_err(|_| VoloError::Other("Lock error".to_string()))?;
+        plugins.remove(id);
+
+        info!("Uninstalled plugin: {}", id);
+        Ok(())
+    }
 }
 
 /// 从目录加载插件
@@ -134,6 +195,26 @@ fn load_plugin_from_dir(dir: &PathBuf) -> Result<Plugin> {
     Ok(plugin)
 }
 
+/// 递归复制目录
+fn copy_dir_all(src: &PathBuf, dst: &PathBuf) -> Result<()> {
+    fs::create_dir_all(dst)?;
+
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let ty = entry.file_type()?;
+        let src_path = entry.path();
+        let dst_path = dst.join(entry.file_name());
+
+        if ty.is_dir() {
+            copy_dir_all(&src_path, &dst_path)?;
+        } else {
+            fs::copy(&src_path, &dst_path)?;
+        }
+    }
+
+    Ok(())
+}
+
 #[tauri::command]
 pub fn list_plugins(state: tauri::State<'_, PluginState>) -> Vec<Plugin> {
     let plugins = state.plugins.lock().unwrap();
@@ -152,12 +233,12 @@ pub fn scan_plugins(state: tauri::State<'_, PluginState>) -> Result<()> {
 }
 
 #[tauri::command]
-pub async fn install_plugin(
-    _source: String,
-    _state: tauri::State<'_, PluginState>,
+pub fn install_plugin_from_dir(
+    source_dir: String,
+    state: tauri::State<'_, PluginState>,
 ) -> Result<Plugin> {
-    // TODO: 实现插件安装
-    Err(VoloError::Plugin("Not implemented".to_string()))
+    let source_path = PathBuf::from(&source_dir);
+    state.install_from_dir(&source_path)
 }
 
 #[tauri::command]
@@ -165,7 +246,14 @@ pub fn uninstall_plugin(
     id: String,
     state: tauri::State<'_, PluginState>,
 ) -> Result<()> {
-    let mut plugins = state.plugins.lock().unwrap();
-    plugins.remove(&id);
-    Ok(())
+    state.uninstall(&id)
+}
+
+// 保留旧的 install_plugin 以兼容
+#[tauri::command]
+pub async fn install_plugin(
+    _source: String,
+    _state: tauri::State<'_, PluginState>,
+) -> Result<Plugin> {
+    Err(VoloError::Plugin("Use install_plugin_from_dir instead".to_string()))
 }

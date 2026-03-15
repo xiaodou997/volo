@@ -104,6 +104,7 @@ pub fn run() {
             plugin::manager::get_plugin,
             plugin::manager::scan_plugins,
             plugin::manager::install_plugin,
+            plugin::manager::install_plugin_from_dir,
             plugin::manager::uninstall_plugin,
             plugin::runner::get_plugin_runtime,
             plugin::runner::get_plugin_html,

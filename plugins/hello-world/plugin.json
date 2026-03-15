@@ -1,0 +1,25 @@
+{
+  "id": "com.volo.hello-world",
+  "name": "Hello World",
+  "version": "1.0.0",
+  "description": "一个简单的示例插件",
+  "main": "index.html",
+  "features": [
+    {
+      "id": "hello",
+      "name": "打招呼",
+      "keywords": ["hello", "你好", "hi", "打招呼"],
+      "description": "显示 Hello World 消息"
+    },
+    {
+      "id": "time",
+      "name": "当前时间",
+      "keywords": ["time", "时间", "现在几点"],
+      "description": "显示当前时间"
+    }
+  ],
+  "permissions": [
+    "clipboard.write",
+    "notification"
+  ]
+}
