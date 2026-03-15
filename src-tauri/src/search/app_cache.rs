@@ -303,10 +303,69 @@ fn scan_app_dir(dir: &PathBuf) -> Result<Vec<AppInfo>> {
 
 #[cfg(target_os = "windows")]
 fn scan_apps() -> Result<Vec<AppInfo>> {
-    // TODO: 实现 Windows 应用扫描
-    // 1. 扫描注册表: HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall
-    // 2. 扫描开始菜单: C:\ProgramData\Microsoft\Windows\Start Menu\Programs
-    Ok(Vec::new())
+    use crate::platform::windows;
+    
+    let mut apps = Vec::new();
+    let mut seen_paths = std::collections::HashSet::new();
+
+    // 1. 扫描注册表
+    if let Ok(registry_apps) = windows::scan_registry_apps() {
+        for (name, path) in registry_apps {
+            if seen_paths.insert(path.clone()) {
+                let pinyin = generate_pinyin(&name);
+                let initials = generate_initials(&name);
+                
+                apps.push(AppInfo {
+                    name,
+                    path,
+                    icon: None,
+                    app_type: "app".to_string(),
+                    pinyin: Some(pinyin),
+                    initials: Some(initials),
+                });
+            }
+        }
+    }
+
+    // 2. 扫描开始菜单
+    if let Ok(start_menu_apps) = windows::scan_start_menu() {
+        for (name, path) in start_menu_apps {
+            if seen_paths.insert(path.clone()) {
+                let pinyin = generate_pinyin(&name);
+                let initials = generate_initials(&name);
+                
+                apps.push(AppInfo {
+                    name,
+                    path,
+                    icon: None,
+                    app_type: "app".to_string(),
+                    pinyin: Some(pinyin),
+                    initials: Some(initials),
+                });
+            }
+        }
+    }
+
+    // 3. 扫描桌面
+    if let Ok(desktop_apps) = windows::scan_desktop() {
+        for (name, path) in desktop_apps {
+            if seen_paths.insert(path.clone()) {
+                let pinyin = generate_pinyin(&name);
+                let initials = generate_initials(&name);
+                
+                apps.push(AppInfo {
+                    name,
+                    path,
+                    icon: None,
+                    app_type: "app".to_string(),
+                    pinyin: Some(pinyin),
+                    initials: Some(initials),
+                });
+            }
+        }
+    }
+
+    Ok(apps)
 }
 
 #[cfg(target_os = "linux")]
@@ -421,7 +480,13 @@ pub fn get_app_icon(path: String, cache: tauri::State<'_, AppCache>) -> Result<O
     Ok(icon)
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "windows")]
+#[tauri::command]
+pub fn get_app_icon(path: String, _cache: tauri::State<'_, AppCache>) -> Result<Option<String>> {
+    crate::platform::windows::get_app_icon(&path)
+}
+
+#[cfg(target_os = "linux")]
 #[tauri::command]
 pub fn get_app_icon(_path: String, _cache: tauri::State<'_, AppCache>) -> Result<Option<String>> {
     Ok(None)

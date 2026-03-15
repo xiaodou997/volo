@@ -46,6 +46,7 @@ plist = "1"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 winapi = { version = "0.3", features = ["winuser", "shellapi"] }
+winreg = "0.52"
 
 [profile.release]
 lto = true
