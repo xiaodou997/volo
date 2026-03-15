@@ -93,8 +93,8 @@ pub fn get_plugin_asset_path(
 
 #[tauri::command]
 pub async fn load_plugin(
-    plugin_id: String,
-    feature_id: String,
+    _plugin_id: String,
+    _feature_id: String,
     _state: tauri::State<'_, crate::plugin::manager::PluginState>,
     _app: AppHandle,
 ) -> Result<()> {

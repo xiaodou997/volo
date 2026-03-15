@@ -129,13 +129,24 @@ watch(
 
 <style scoped>
 .result-list {
+  flex: 1;
   overflow-y: auto;
   max-height: 400px;
+  background: var(--bg-primary);
+}
+
+.result-list:last-child {
+  border-radius: 0 0 10px 10px;
+}
+
+.result-item:last-child {
+  border-radius: 0 0 10px 10px;
 }
 
 .result-item {
   display: flex;
   align-items: center;
+  flex-shrink: 0;
   height: 50px;
   padding: 0 16px;
   cursor: pointer;

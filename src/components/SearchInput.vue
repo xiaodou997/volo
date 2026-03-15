@@ -106,10 +106,13 @@ defineExpose({
 .search-input-wrapper {
   display: flex;
   align-items: center;
+  flex-shrink: 0;
   height: 60px;
+  min-height: 60px;
   padding: 0 16px;
   background: var(--bg-primary);
   border-bottom: 1px solid var(--border-color);
+  border-radius: 10px 10px 0 0;
 }
 
 .search-icon {

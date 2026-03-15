@@ -3,7 +3,7 @@
  */
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, ref, nextTick } from 'vue';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { invoke } from '@tauri-apps/api/core';
 import SearchInput from './components/SearchInput.vue';
@@ -169,15 +169,17 @@ function onSubInputSetValue(text: string) {
 
 // 更新窗口大小
 async function updateWindowSize() {
-  await invoke('set_window_height', { height: windowHeight.value });
+  await nextTick();
+  const height = windowHeight.value;
+  await invoke('set_window_height', { height });
 }
 
 // 失焦隐藏
 onMounted(async () => {
   const unlisten = await mainWindow.onFocusChanged(({ payload }: { payload: boolean }) => {
-    if (!payload && searchStore.query === '' && !pluginMode.value) {
-      // 失焦且无搜索内容时隐藏
-      // invoke('hide_main_window');
+    if (!payload && !settingsMode.value && !pluginMode.value) {
+      // 失焦时隐藏（排除设置模式和插件模式）
+      invoke('hide_main_window');
     }
   });
 
@@ -240,10 +242,12 @@ onMounted(async () => {
   </div>
 </template>
 
-<style scoped>
+<style>
 .app {
   display: flex;
   flex-direction: column;
+  height: 100%;
+  min-height: 60px;
   background: var(--bg-primary);
   border-radius: 10px;
   overflow: hidden;

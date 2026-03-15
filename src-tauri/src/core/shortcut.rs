@@ -92,7 +92,13 @@ impl ShortcutManager {
         let shortcut = Shortcut::new(Some(Modifiers::ALT), Code::KeyR);
 
         let app_handle = app.clone();
-        app.global_shortcut().on_shortcut(shortcut, move |_app, _shortcut, _event| {
+        app.global_shortcut().on_shortcut(shortcut, move |_app, _shortcut, event| {
+            // 只在按键按下时触发
+            use tauri_plugin_global_shortcut::ShortcutState;
+            if event.state != ShortcutState::Pressed {
+                return;
+            }
+
             // 切换主窗口
             if let Some(win) = app_handle.get_webview_window("main") {
                 if win.is_visible().unwrap_or(false) {
@@ -139,7 +145,13 @@ pub fn register_shortcut(
 
     // 注册新快捷键
     let app_handle = app.clone();
-    app.global_shortcut().on_shortcut(new_shortcut, move |_app, _shortcut, _event| {
+    app.global_shortcut().on_shortcut(new_shortcut, move |_app, _shortcut, event| {
+        // 只在按键按下时触发
+        use tauri_plugin_global_shortcut::ShortcutState;
+        if event.state != ShortcutState::Pressed {
+            return;
+        }
+
         // 切换主窗口
         if let Some(win) = app_handle.get_webview_window("main") {
             if win.is_visible().unwrap_or(false) {

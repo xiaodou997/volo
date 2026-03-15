@@ -16,7 +16,12 @@ impl WindowManager {
     /// 显示主窗口
     pub fn show_main_window(app: &AppHandle) -> Result<()> {
         if let Some(win) = Self::get_main_window(app) {
-            // 定位到屏幕中央上方
+            // 先设置窗口大小为默认大小
+            win.set_size(tauri::Size::Logical(tauri::LogicalSize {
+                width: 800.0,
+                height: 60.0,
+            }))?;
+            // 定位到屏幕中央
             win.move_window(Position::Center)?;
             win.show()?;
             win.set_focus()?;
@@ -47,10 +52,10 @@ impl WindowManager {
     /// 设置窗口高度
     pub fn set_window_height(app: &AppHandle, height: u32) -> Result<()> {
         if let Some(win) = Self::get_main_window(app) {
-            let size = win.inner_size()?;
-            win.set_size(tauri::Size::Physical(tauri::PhysicalSize {
-                width: size.width,
-                height,
+            // 使用逻辑像素大小，宽度保持 800
+            win.set_size(tauri::Size::Logical(tauri::LogicalSize {
+                width: 800.0,
+                height: height as f64,
             }))?;
         }
         Ok(())

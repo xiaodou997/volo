@@ -21,7 +21,7 @@ pub async fn clipboard_write_text(app: AppHandle, text: String) -> Result<()> {
 
 /// 读取剪贴板图片（返回 base64）
 #[tauri::command]
-pub async fn clipboard_read_image(app: AppHandle) -> Result<Option<String>> {
+pub async fn clipboard_read_image(_app: AppHandle) -> Result<Option<String>> {
     #[cfg(target_os = "macos")]
     {
         // 使用 pngpaste 读取剪贴板图片
@@ -46,7 +46,7 @@ pub async fn clipboard_read_image(app: AppHandle) -> Result<Option<String>> {
 
 /// 写入图片到剪贴板（从 base64）
 #[tauri::command]
-pub async fn clipboard_write_image(app: AppHandle, base64: String) -> Result<()> {
+pub async fn clipboard_write_image(_app: AppHandle, base64: String) -> Result<()> {
     // 移除 data:image/xxx;base64, 前缀
     let base64_data = if base64.contains(",") {
         base64.split(",").nth(1).unwrap_or(&base64)
