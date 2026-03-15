@@ -109,6 +109,15 @@ impl PluginState {
         plugins.get(id).cloned()
     }
 
+    /// 获取所有插件
+    pub fn get_all_plugins(&self) -> Vec<Plugin> {
+        let plugins = self.plugins.lock().ok();
+        match plugins {
+            Some(p) => p.values().cloned().collect(),
+            None => Vec::new(),
+        }
+    }
+
     /// 安装插件（从本地目录）
     pub fn install_from_dir(&self, source_dir: &PathBuf) -> Result<Plugin> {
         // 验证源目录

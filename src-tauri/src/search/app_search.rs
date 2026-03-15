@@ -3,13 +3,15 @@
 use serde::{Deserialize, Serialize};
 use crate::search::app_cache::{AppCache, AppInfo};
 use crate::search::history::SearchHistoryManager;
+use crate::search::plugin_search::{search_plugins, PluginInfo};
+use crate::plugin::manager::PluginState;
 
 /// 搜索结果
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum SearchResult {
     App(AppInfo),
-    Plugin { plugin_id: String, plugin_name: String, feature: FeatureInfo },
+    Plugin { plugin: PluginInfo, feature: FeatureInfo },
 }
 
 /// 功能信息
@@ -139,6 +141,7 @@ pub fn search(
     query: String,
     cache: tauri::State<'_, AppCache>,
     history: tauri::State<'_, SearchHistoryManager>,
+    plugin_state: tauri::State<'_, PluginState>,
 ) -> Vec<SearchResult> {
     let mut results: Vec<SearchResult> = Vec::new();
 
@@ -148,7 +151,14 @@ pub fn search(
         results.push(SearchResult::App(app));
     }
 
-    // TODO: 搜索插件
+    // 搜索插件
+    let plugins = plugin_state.get_all_plugins();
+    for plugin_result in search_plugins(&plugins, &query) {
+        results.push(SearchResult::Plugin {
+            plugin: plugin_result.plugin,
+            feature: plugin_result.feature,
+        });
+    }
 
     results
 }

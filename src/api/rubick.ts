@@ -41,18 +41,13 @@ export interface FeatureInfo {
   id: string;
   name: string;
   keywords: string[];
-  icon?: string;
-  description?: string;
 }
 
 export interface PluginInfo {
   id: string;
   name: string;
-  path: string;
-  features: FeatureInfo[];
-  version?: string;
-  description?: string;
   icon?: string;
+  description?: string;
 }
 
 export type SearchResult =
