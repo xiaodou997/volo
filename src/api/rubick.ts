@@ -55,13 +55,22 @@ export type SearchResult =
   | { type: 'plugin'; plugin: PluginInfo; feature: FeatureInfo }
   | { type: 'file'; path: string; name: string; file_type: string; extension?: string };
 
-// 文件信息
+// 文件信息（来自索引）
 export interface FileInfo {
   path: string;
   name: string;
-  type: 'file' | 'directory' | 'unknown';
-  size?: number;
-  modified?: string;
+  type: 'file' | 'directory';
+  extension?: string;
+  size: number;
+  modified: number;
+}
+
+// 索引统计
+export interface IndexStats {
+  total_files: number;
+  total_dirs: number;
+  last_scan?: number;
+  is_indexing: boolean;
 }
 
 // 文件选择选项

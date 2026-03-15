@@ -12,7 +12,7 @@ use plugin::manager::PluginState;
 use api::database::Database;
 use search::app_cache::AppCache;
 use search::history::SearchHistoryManager;
-use search::file_search::FileSearcher;
+use search::file_index::FileIndex;
 use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -62,16 +62,13 @@ pub fn run() {
             let shortcut_manager = ShortcutManager::new();
             app.manage(shortcut_manager);
 
-            // 文件搜索器
-            let file_searcher = FileSearcher::new();
-            // 后台索引文件
-            {
-                let searcher = file_searcher.clone();
-                std::thread::spawn(move || {
-                    let _ = searcher.index_files();
-                });
-            }
-            app.manage(file_searcher);
+            // 文件索引（新的优化版本）
+            let file_index = FileIndex::new(&app.path().app_data_dir()?)?;
+            // 先加载现有索引
+            let _ = file_index.get_stats();
+            // 启动后台增量索引
+            file_index.start_background_index();
+            app.manage(file_index);
 
             // 剪贴板历史
             let clipboard_history = ClipboardHistory::new();
@@ -139,9 +136,10 @@ pub fn run() {
             search::history::record_app_usage,
             search::history::get_search_history,
             search::history::clear_search_history,
-            search::file_search::file_search,
-            search::file_search::file_index,
-            search::file_search::file_index_status,
+            // 文件索引（新的优化版本）
+            search::file_index::file_index_search,
+            search::file_index::file_index_stats,
+            search::file_index::file_index_refresh,
             // 剪贴板历史
             core::clipboard_history::clipboard_history_get_all,
             core::clipboard_history::clipboard_history_remove,

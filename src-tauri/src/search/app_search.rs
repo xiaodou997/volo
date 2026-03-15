@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use crate::search::app_cache::{AppCache, AppInfo};
 use crate::search::history::SearchHistoryManager;
 use crate::search::plugin_search::{search_plugins, PluginInfo};
-use crate::search::file_search::FileSearcher;
+use crate::search::file_index::FileIndex;
 use crate::plugin::manager::PluginState;
 
 /// 搜索结果
@@ -144,7 +144,7 @@ pub fn search(
     cache: tauri::State<'_, AppCache>,
     history: tauri::State<'_, SearchHistoryManager>,
     plugin_state: tauri::State<'_, PluginState>,
-    file_searcher: tauri::State<'_, FileSearcher>,
+    file_index: tauri::State<'_, FileIndex>,
 ) -> Vec<SearchResult> {
     let mut results: Vec<SearchResult> = Vec::new();
 
@@ -163,8 +163,8 @@ pub fn search(
         });
     }
 
-    // 搜索文件
-    if let Ok(files) = file_searcher.search(&query, 5) {
+    // 搜索文件（使用新的索引）
+    if let Ok(files) = file_index.search(&query, 5) {
         for file in files {
             results.push(SearchResult::File {
                 path: file.path,
