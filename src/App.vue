@@ -10,6 +10,7 @@ import SearchInput from './components/SearchInput.vue';
 import ResultList from './components/ResultList.vue';
 import PluginView from './components/PluginView.vue';
 import SubInput from './components/SubInput.vue';
+import SettingsView from './components/SettingsView.vue';
 import { useSearchStore } from './stores/search';
 import './api/rubick';
 
@@ -19,6 +20,7 @@ const searchStore = useSearchStore();
 
 // 插件状态
 const pluginMode = ref(false);
+const settingsMode = ref(false);
 const currentPlugin = ref<{ pluginId: string; featureId: string } | null>(null);
 const pluginViewRef = ref<InstanceType<typeof PluginView> | null>(null);
 
@@ -30,6 +32,10 @@ const subInputValue = ref('');
 // 计算窗口高度
 const windowHeight = computed(() => {
   let height = 60; // 基础高度
+
+  if (settingsMode.value) {
+    return 450; // 设置模式固定高度
+  }
 
   if (pluginMode.value) {
     height = 400; // 插件模式固定高度
@@ -48,13 +54,22 @@ const windowHeight = computed(() => {
 
 // 处理输入
 function handleInput(value: string) {
+  // 检查是否是设置命令
+  if (value.toLowerCase() === 'settings' || value === '设置') {
+    enterSettings();
+    return;
+  }
+
   searchStore.search(value);
   updateWindowSize();
 }
 
 // 处理清空
 function handleClear() {
-  if (pluginMode.value) {
+  if (settingsMode.value) {
+    // 退出设置模式
+    exitSettings();
+  } else if (pluginMode.value) {
     // 退出插件模式
     exitPlugin();
   } else {
@@ -99,6 +114,19 @@ function exitPlugin() {
   currentPlugin.value = null;
   subInputVisible.value = false;
   searchStore.clearSearch();
+  updateWindowSize();
+}
+
+// 进入设置模式
+function enterSettings() {
+  settingsMode.value = true;
+  searchStore.clearSearch();
+  updateWindowSize();
+}
+
+// 退出设置模式
+function exitSettings() {
+  settingsMode.value = false;
   updateWindowSize();
 }
 
@@ -154,8 +182,13 @@ onMounted(async () => {
 
 <template>
   <div class="app">
+    <!-- 设置模式 -->
+    <template v-if="settingsMode">
+      <SettingsView @back="exitSettings" />
+    </template>
+
     <!-- 搜索模式 -->
-    <template v-if="!pluginMode">
+    <template v-else-if="!pluginMode">
       <SearchInput
         v-model="searchStore.query"
         placeholder="搜索应用、插件..."

@@ -57,6 +57,10 @@ pub fn run() {
             let search_history = SearchHistoryManager::new(&history_path)?;
             app.manage(search_history);
 
+            // 快捷键管理器
+            let shortcut_manager = ShortcutManager::new();
+            app.manage(shortcut_manager);
+
             // 创建托盘
             create_tray(app.handle())?;
 

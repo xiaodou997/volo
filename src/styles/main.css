@@ -8,30 +8,73 @@
   --bg-secondary: #f5f5f7;
   --bg-hover: #f0f0f2;
   --bg-active: #e8e8ea;
-  
+
   --text-primary: #1d1d1f;
   --text-secondary: #6e6e73;
   --text-tertiary: #86868b;
-  
+
   --border-color: #e5e5e7;
   --accent-color: #007aff;
+  --danger-color: #ff3b30;
+
+  --hover-bg: rgba(0, 0, 0, 0.04);
+  --window-opacity: 0.95;
 }
 
+/* 暗色主题 - 跟随系统 */
 @media (prefers-color-scheme: dark) {
-  :root {
-    /* 暗色主题 */
+  :root:not(.light) {
     --bg-primary: #1c1c1e;
     --bg-secondary: #2c2c2e;
     --bg-hover: #3a3a3c;
     --bg-active: #48484a;
-    
+
     --text-primary: #f5f5f7;
     --text-secondary: #a1a1a6;
     --text-tertiary: #6e6e73;
-    
+
     --border-color: #38383a;
     --accent-color: #0a84ff;
+    --danger-color: #ff453a;
+
+    --hover-bg: rgba(255, 255, 255, 0.08);
   }
+}
+
+/* 暗色主题 - 手动切换 */
+:root.dark {
+  --bg-primary: #1c1c1e;
+  --bg-secondary: #2c2c2e;
+  --bg-hover: #3a3a3c;
+  --bg-active: #48484a;
+
+  --text-primary: #f5f5f7;
+  --text-secondary: #a1a1a6;
+  --text-tertiary: #6e6e73;
+
+  --border-color: #38383a;
+  --accent-color: #0a84ff;
+  --danger-color: #ff453a;
+
+  --hover-bg: rgba(255, 255, 255, 0.08);
+}
+
+/* 亮色主题 - 手动切换 */
+:root.light {
+  --bg-primary: #ffffff;
+  --bg-secondary: #f5f5f7;
+  --bg-hover: #f0f0f2;
+  --bg-active: #e8e8ea;
+
+  --text-primary: #1d1d1f;
+  --text-secondary: #6e6e73;
+  --text-tertiary: #86868b;
+
+  --border-color: #e5e5e7;
+  --accent-color: #007aff;
+  --danger-color: #ff3b30;
+
+  --hover-bg: rgba(0, 0, 0, 0.04);
 }
 
 * {
