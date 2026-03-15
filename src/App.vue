@@ -11,6 +11,7 @@ import ResultList from './components/ResultList.vue';
 import PluginView from './components/PluginView.vue';
 import SubInput from './components/SubInput.vue';
 import SettingsView from './components/SettingsView.vue';
+import PluginManager from './components/PluginManager.vue';
 import { useSearchStore } from './stores/search';
 import './api/rubick';
 
@@ -21,6 +22,7 @@ const searchStore = useSearchStore();
 // 插件状态
 const pluginMode = ref(false);
 const settingsMode = ref(false);
+const pluginManagerMode = ref(false);
 const currentPlugin = ref<{ pluginId: string; featureId: string } | null>(null);
 const pluginViewRef = ref<InstanceType<typeof PluginView> | null>(null);
 
@@ -35,6 +37,10 @@ const windowHeight = computed(() => {
 
   if (settingsMode.value) {
     return 450; // 设置模式固定高度
+  }
+
+  if (pluginManagerMode.value) {
+    return 400; // 插件管理模式固定高度
   }
 
   if (pluginMode.value) {
@@ -60,6 +66,12 @@ function handleInput(value: string) {
     return;
   }
 
+  // 检查是否是插件管理命令
+  if (value.toLowerCase() === 'plugins' || value === '插件') {
+    enterPluginManager();
+    return;
+  }
+
   searchStore.search(value);
   updateWindowSize();
 }
@@ -69,6 +81,9 @@ function handleClear() {
   if (settingsMode.value) {
     // 退出设置模式
     exitSettings();
+  } else if (pluginManagerMode.value) {
+    // 退出插件管理模式
+    exitPluginManager();
   } else if (pluginMode.value) {
     // 退出插件模式
     exitPlugin();
@@ -138,6 +153,25 @@ function exitSettings() {
   updateWindowSize();
 }
 
+// 进入插件管理模式
+function enterPluginManager() {
+  pluginManagerMode.value = true;
+  searchStore.clearSearch();
+  updateWindowSize();
+}
+
+// 退出插件管理模式
+function exitPluginManager() {
+  pluginManagerMode.value = false;
+  updateWindowSize();
+}
+
+// 从插件管理器打开插件
+function onOpenPluginFromManager(pluginId: string, featureId: string) {
+  pluginManagerMode.value = false;
+  enterPlugin(pluginId, featureId);
+}
+
 // 插件退出回调
 function onPluginExit() {
   exitPlugin();
@@ -177,8 +211,8 @@ async function updateWindowSize() {
 // 失焦隐藏
 onMounted(async () => {
   const unlisten = await mainWindow.onFocusChanged(({ payload }: { payload: boolean }) => {
-    if (!payload && !settingsMode.value && !pluginMode.value) {
-      // 失焦时隐藏（排除设置模式和插件模式）
+    if (!payload && !settingsMode.value && !pluginManagerMode.value && !pluginMode.value) {
+      // 失焦时隐藏（排除设置模式、插件管理模式和插件模式）
       invoke('hide_main_window');
     }
   });
@@ -195,6 +229,11 @@ onMounted(async () => {
     <!-- 设置模式 -->
     <template v-if="settingsMode">
       <SettingsView @back="exitSettings" />
+    </template>
+
+    <!-- 插件管理模式 -->
+    <template v-else-if="pluginManagerMode">
+      <PluginManager @back="exitPluginManager" @open="onOpenPluginFromManager" />
     </template>
 
     <!-- 搜索模式 -->
