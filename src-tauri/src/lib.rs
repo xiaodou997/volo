@@ -81,13 +81,31 @@ pub fn run() {
             // 剪贴板
             api::clipboard_read_text,
             api::clipboard_write_text,
+            api::clipboard_read_image,
+            api::clipboard_write_image,
+            api::clipboard_read_files,
             // 数据库
             api::database::db_put,
             api::database::db_get,
             api::database::db_remove,
             api::database::db_all,
+            // 文件系统
+            api::fs::fs_read,
+            api::fs::fs_read_binary,
+            api::fs::fs_write,
+            api::fs::fs_write_binary,
+            api::fs::fs_exists,
+            api::fs::fs_mkdir,
+            api::fs::fs_remove,
+            api::fs::fs_list,
+            api::fs::fs_pick_file,
+            api::fs::fs_pick_files,
+            api::fs::fs_pick_folder,
             // 通知
             api::notification::notification_show,
+            // 截图
+            api::screen::screen_capture,
+            api::screen::screen_capture_area,
             // Shell
             api::shell::shell_open,
             api::shell::shell_open_path,

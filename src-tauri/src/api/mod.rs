@@ -4,6 +4,7 @@
 pub mod clipboard;
 pub mod database;
 pub mod notification;
+pub mod screen;
 pub mod shell;
 pub mod fs;
 
@@ -11,5 +12,6 @@ pub mod fs;
 pub use clipboard::*;
 pub use database::*;
 pub use notification::*;
+pub use screen::*;
 pub use shell::*;
 pub use fs::*;

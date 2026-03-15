@@ -9,6 +9,7 @@ import { invoke } from '@tauri-apps/api/core';
 import SearchInput from './components/SearchInput.vue';
 import ResultList from './components/ResultList.vue';
 import PluginView from './components/PluginView.vue';
+import SubInput from './components/SubInput.vue';
 import { useSearchStore } from './stores/search';
 import './api/rubick';
 
@@ -19,22 +20,30 @@ const searchStore = useSearchStore();
 // 插件状态
 const pluginMode = ref(false);
 const currentPlugin = ref<{ pluginId: string; featureId: string } | null>(null);
+const pluginViewRef = ref<InstanceType<typeof PluginView> | null>(null);
+
+// 子输入框状态
+const subInputVisible = ref(false);
+const subInputPlaceholder = ref('');
+const subInputValue = ref('');
 
 // 计算窗口高度
 const windowHeight = computed(() => {
-  if (pluginMode.value) {
-    return 400; // 插件模式固定高度
-  }
+  let height = 60; // 基础高度
 
-  const baseHeight = 60;
-  const resultHeight = 50;
-  const maxResults = 8;
+  if (pluginMode.value) {
+    height = 400; // 插件模式固定高度
+    if (subInputVisible.value) {
+      height += 40; // 子输入框高度
+    }
+    return height;
+  }
 
   if (searchStore.hasResults) {
-    const count = Math.min(searchStore.results.length, maxResults);
-    return baseHeight + count * resultHeight;
+    const count = Math.min(searchStore.results.length, 8);
+    height += count * 50;
   }
-  return baseHeight;
+  return height;
 });
 
 // 处理输入
@@ -80,6 +89,7 @@ async function handleConfirm() {
 function enterPlugin(pluginId: string, featureId: string) {
   currentPlugin.value = { pluginId, featureId };
   pluginMode.value = true;
+  subInputVisible.value = false;
   updateWindowSize();
 }
 
@@ -87,6 +97,7 @@ function enterPlugin(pluginId: string, featureId: string) {
 function exitPlugin() {
   pluginMode.value = false;
   currentPlugin.value = null;
+  subInputVisible.value = false;
   searchStore.clearSearch();
   updateWindowSize();
 }
@@ -94,6 +105,30 @@ function exitPlugin() {
 // 插件退出回调
 function onPluginExit() {
   exitPlugin();
+}
+
+// 子输入框变化
+function onSubInputChange(value: string) {
+  // 通知插件
+  pluginViewRef.value?.handleSubInputChange(value);
+}
+
+// 子输入框显示
+function onSubInputShow(data: { placeholder?: string }) {
+  subInputVisible.value = true;
+  subInputPlaceholder.value = data.placeholder || '';
+  updateWindowSize();
+}
+
+// 子输入框隐藏
+function onSubInputHide() {
+  subInputVisible.value = false;
+  updateWindowSize();
+}
+
+// 子输入框设置值
+function onSubInputSetValue(text: string) {
+  subInputValue.value = text;
 }
 
 // 更新窗口大小
@@ -142,11 +177,23 @@ onMounted(async () => {
 
     <!-- 插件模式 -->
     <template v-else-if="currentPlugin">
+      <!-- 子输入框 -->
+      <SubInput
+        :visible="subInputVisible"
+        v-model="subInputValue"
+        :placeholder="subInputPlaceholder"
+        @change="onSubInputChange"
+      />
+
       <PluginView
+        ref="pluginViewRef"
         :plugin-id="currentPlugin.pluginId"
         :feature-id="currentPlugin.featureId"
         :query="searchStore.query"
         @exit="onPluginExit"
+        @sub-input-show="onSubInputShow"
+        @sub-input-hide="onSubInputHide"
+        @sub-input-set-value="onSubInputSetValue"
       />
     </template>
   </div>

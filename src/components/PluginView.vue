@@ -86,6 +86,23 @@ function injectRubickAPI() {
 
   const win = pluginFrame.value.contentWindow;
 
+  // 子输入框 API
+  const subInputAPI = {
+    show: (placeholder?: string) => {
+      sendMessage({ type: 'subInputShow', data: { placeholder } });
+    },
+    hide: () => {
+      sendMessage({ type: 'subInputHide' });
+    },
+    setValue: (text: string) => {
+      sendMessage({ type: 'subInputSetValue', data: { text } });
+    },
+    onChange: (callback: (text: string) => void) => {
+      // 存储回调
+      (win as any).__subInputCallback = callback;
+    },
+  };
+
   // 创建 rubick API 对象
   const rubickAPI = {
     // 生命周期钩子
@@ -104,21 +121,24 @@ function injectRubickAPI() {
     clipboard: {
       readText: () => invoke('clipboard_read_text'),
       writeText: (text: string) => invoke('clipboard_write_text', { text }),
+      readImage: () => invoke<string | null>('clipboard_read_image'),
+      writeImage: (base64: string) => invoke('clipboard_write_image', { base64 }),
+      readFiles: () => invoke<string[]>('clipboard_read_files'),
     },
 
     // 数据库
     db: {
-      put: (id: string, data: any) => invoke('db_put', { id, data }),
-      get: (id: string) => invoke('db_get', { id }),
-      remove: (id: string) => invoke('db_remove', { id }),
-      all: () => invoke('db_all'),
+      put: (id: string, data: any) => invoke('db_put', { pluginId: props.pluginId, id, data }),
+      get: (id: string) => invoke('db_get', { pluginId: props.pluginId, id }),
+      remove: (id: string) => invoke('db_remove', { pluginId: props.pluginId, id }),
+      all: () => invoke('db_all', { pluginId: props.pluginId }),
     },
 
     // 存储
     storage: {
-      set: (key: string, value: any) => invoke('db_put', { id: key, data: value }),
-      get: (key: string) => invoke('db_get', { id: key }).then((doc: any) => doc?.data ?? null),
-      remove: (key: string) => invoke('db_remove', { id: key }),
+      set: (key: string, value: any) => invoke('db_put', { pluginId: props.pluginId, id: key, data: value }),
+      get: (key: string) => invoke('db_get', { pluginId: props.pluginId, id: key }).then((doc: any) => doc?.data ?? null),
+      remove: (key: string) => invoke('db_remove', { pluginId: props.pluginId, id: key }),
     },
 
     // 通知
@@ -141,6 +161,38 @@ function injectRubickAPI() {
                 navigator.platform.toLowerCase().includes('win') ? 'windows' : 'linux',
       darkMode: window.matchMedia('(prefers-color-scheme: dark)').matches,
       version: '0.1.0',
+    },
+
+    // 子输入框
+    subInput: subInputAPI,
+
+    // 截图
+    screenCapture: async () => {
+      const result = await invoke<string>('screen_capture');
+      return result;
+    },
+
+    // 截取选定区域
+    screenCaptureArea: async () => {
+      const result = await invoke<string>('screen_capture_area');
+      return result;
+    },
+
+    // 文件系统
+    fs: {
+      read: (path: string) => invoke<string>('fs_read', { path }),
+      readBinary: (path: string) => invoke<string>('fs_read_binary', { path }),
+      write: (path: string, content: string) => invoke('fs_write', { path, content }),
+      writeBinary: (path: string, content: string) => invoke('fs_write_binary', { path, content }),
+      exists: (path: string) => invoke<boolean>('fs_exists', { path }),
+      mkdir: (path: string) => invoke('fs_mkdir', { path }),
+      remove: (path: string) => invoke('fs_remove', { path }),
+      list: (path: string) => invoke('fs_list', { path }),
+      pickFile: (options?: { multiple?: boolean; filters?: { name: string; extensions: string[] }[] }) =>
+        invoke<string | null>('fs_pick_file', { options }),
+      pickFiles: (options?: { filters?: { name: string; extensions: string[] }[] }) =>
+        invoke<string[]>('fs_pick_files', { options }),
+      pickFolder: () => invoke<string | null>('fs_pick_folder'),
     },
   };
 
@@ -166,6 +218,25 @@ function handleMessage(event: MessageEvent) {
     case 'setWindowSize':
       invoke('set_window_height', { height: data?.height || 400 });
       break;
+    case 'subInputShow':
+      emit('subInputShow' as any, data);
+      break;
+    case 'subInputHide':
+      emit('subInputHide' as any);
+      break;
+    case 'subInputSetValue':
+      emit('subInputSetValue' as any, data?.text);
+      break;
+  }
+}
+
+// 处理来自父组件的子输入框变化
+function handleSubInputChange(text: string) {
+  if (pluginFrame.value?.contentWindow) {
+    const win = pluginFrame.value.contentWindow as any;
+    if (win.__subInputCallback) {
+      win.__subInputCallback(text);
+    }
   }
 }
 
@@ -193,6 +264,7 @@ onUnmounted(() => {
 // 暴露方法
 defineExpose({
   sendMessage,
+  handleSubInputChange,
 });
 </script>
 

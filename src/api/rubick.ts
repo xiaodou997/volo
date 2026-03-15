@@ -54,6 +54,26 @@ export type SearchResult =
   | { type: 'app'; name: string; path: string; icon?: string; pinyin?: string; initials?: string }
   | { type: 'plugin'; plugin: PluginInfo; feature: FeatureInfo };
 
+// 文件信息
+export interface FileInfo {
+  path: string;
+  name: string;
+  type: 'file' | 'directory' | 'unknown';
+  size?: number;
+  modified?: string;
+}
+
+// 文件选择选项
+export interface PickOptions {
+  multiple?: boolean;
+  filters?: FileFilter[];
+}
+
+export interface FileFilter {
+  name: string;
+  extensions: string[];
+}
+
 // ============ Rubick API ============
 
 export interface RubickAPI {
@@ -78,6 +98,9 @@ export interface RubickAPI {
   clipboard: {
     readText: () => Promise<string>;
     writeText: (text: string) => Promise<void>;
+    readImage: () => Promise<string | null>;
+    writeImage: (base64: string) => Promise<void>;
+    readFiles: () => Promise<string[]>;
   };
 
   // 数据库
@@ -112,6 +135,33 @@ export interface RubickAPI {
     darkMode: boolean;
     version: string;
   };
+
+  // 子输入框
+  subInput: {
+    show: (placeholder?: string) => void;
+    hide: () => void;
+    setValue: (text: string) => void;
+    onChange: (callback: (text: string) => void) => void;
+  };
+
+  // 截图
+  screenCapture: () => Promise<string>;
+  screenCaptureArea: () => Promise<string>;
+
+  // 文件系统
+  fs: {
+    read: (path: string) => Promise<string>;
+    readBinary: (path: string) => Promise<string>;
+    write: (path: string, content: string) => Promise<void>;
+    writeBinary: (path: string, content: string) => Promise<void>;
+    exists: (path: string) => Promise<boolean>;
+    mkdir: (path: string) => Promise<void>;
+    remove: (path: string) => Promise<void>;
+    list: (path: string) => Promise<FileInfo[]>;
+    pickFile: (options?: PickOptions) => Promise<string | null>;
+    pickFiles: (options?: PickOptions) => Promise<string[]>;
+    pickFolder: () => Promise<string | null>;
+  };
 }
 
 // ============ API 实现 ============
@@ -131,6 +181,9 @@ const rubick: RubickAPI = {
   clipboard: {
     readText: () => invoke('clipboard_read_text'),
     writeText: (text) => invoke('clipboard_write_text', { text }),
+    readImage: () => invoke<string | null>('clipboard_read_image'),
+    writeImage: (base64) => invoke('clipboard_write_image', { base64 }),
+    readFiles: () => invoke<string[]>('clipboard_read_files'),
   },
 
   db: {
@@ -178,6 +231,39 @@ const rubick: RubickAPI = {
     get version() {
       return '0.1.0';
     },
+  },
+
+  subInput: {
+    show: (placeholder?: string) => {
+      // 通过 postMessage 通知父组件
+      window.parent.postMessage({ type: 'subInputShow', data: { placeholder } }, '*');
+    },
+    hide: () => {
+      window.parent.postMessage({ type: 'subInputHide' }, '*');
+    },
+    setValue: (text: string) => {
+      window.parent.postMessage({ type: 'subInputSetValue', data: { text } }, '*');
+    },
+    onChange: (_callback: (text: string) => void) => {
+      // 回调在 PluginView 中处理
+    },
+  },
+
+  screenCapture: () => invoke<string>('screen_capture'),
+  screenCaptureArea: () => invoke<string>('screen_capture_area'),
+
+  fs: {
+    read: (path) => invoke<string>('fs_read', { path }),
+    readBinary: (path) => invoke<string>('fs_read_binary', { path }),
+    write: (path, content) => invoke('fs_write', { path, content }),
+    writeBinary: (path, content) => invoke('fs_write_binary', { path, content }),
+    exists: (path) => invoke<boolean>('fs_exists', { path }),
+    mkdir: (path) => invoke('fs_mkdir', { path }),
+    remove: (path) => invoke('fs_remove', { path }),
+    list: (path) => invoke<FileInfo[]>('fs_list', { path }),
+    pickFile: (options) => invoke<string | null>('fs_pick_file', { options }),
+    pickFiles: (options) => invoke<string[]>('fs_pick_files', { options }),
+    pickFolder: () => invoke<string | null>('fs_pick_folder'),
   },
 };
 
