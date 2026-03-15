@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use crate::search::app_cache::{AppCache, AppInfo};
 use crate::search::history::SearchHistoryManager;
 use crate::search::plugin_search::{search_plugins, PluginInfo};
+use crate::search::file_search::FileSearcher;
 use crate::plugin::manager::PluginState;
 
 /// 搜索结果
@@ -12,6 +13,7 @@ use crate::plugin::manager::PluginState;
 pub enum SearchResult {
     App(AppInfo),
     Plugin { plugin: PluginInfo, feature: FeatureInfo },
+    File { path: String, name: String, file_type: String, extension: Option<String> },
 }
 
 /// 功能信息
@@ -142,6 +144,7 @@ pub fn search(
     cache: tauri::State<'_, AppCache>,
     history: tauri::State<'_, SearchHistoryManager>,
     plugin_state: tauri::State<'_, PluginState>,
+    file_searcher: tauri::State<'_, FileSearcher>,
 ) -> Vec<SearchResult> {
     let mut results: Vec<SearchResult> = Vec::new();
 
@@ -158,6 +161,18 @@ pub fn search(
             plugin: plugin_result.plugin,
             feature: plugin_result.feature,
         });
+    }
+
+    // 搜索文件
+    if let Ok(files) = file_searcher.search(&query, 5) {
+        for file in files {
+            results.push(SearchResult::File {
+                path: file.path,
+                name: file.name,
+                file_type: file.file_type,
+                extension: file.extension,
+            });
+        }
     }
 
     results

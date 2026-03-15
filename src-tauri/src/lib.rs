@@ -12,6 +12,7 @@ use plugin::manager::PluginState;
 use api::database::Database;
 use search::app_cache::AppCache;
 use search::history::SearchHistoryManager;
+use search::file_search::FileSearcher;
 use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -60,6 +61,17 @@ pub fn run() {
             // 快捷键管理器
             let shortcut_manager = ShortcutManager::new();
             app.manage(shortcut_manager);
+
+            // 文件搜索器
+            let file_searcher = FileSearcher::new();
+            // 后台索引文件
+            {
+                let searcher = file_searcher.clone();
+                std::thread::spawn(move || {
+                    let _ = searcher.index_files();
+                });
+            }
+            app.manage(file_searcher);
 
             // 创建托盘
             create_tray(app.handle())?;
@@ -121,6 +133,9 @@ pub fn run() {
             search::history::record_app_usage,
             search::history::get_search_history,
             search::history::clear_search_history,
+            search::file_search::file_search,
+            search::file_search::file_index,
+            search::file_search::file_index_status,
             // 插件
             plugin::manager::list_plugins,
             plugin::manager::get_plugin,

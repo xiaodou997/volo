@@ -52,7 +52,8 @@ export interface PluginInfo {
 
 export type SearchResult =
   | { type: 'app'; name: string; path: string; icon?: string; pinyin?: string; initials?: string }
-  | { type: 'plugin'; plugin: PluginInfo; feature: FeatureInfo };
+  | { type: 'plugin'; plugin: PluginInfo; feature: FeatureInfo }
+  | { type: 'file'; path: string; name: string; file_type: string; extension?: string };
 
 // 文件信息
 export interface FileInfo {

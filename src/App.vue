@@ -79,26 +79,34 @@ function handleClear() {
 }
 
 // 处理确认
-async function handleConfirm() {
-  const result = searchStore.selectedResult;
-  if (!result) return;
+  async function handleConfirm() {
+    const result = searchStore.selectedResult;
+    if (!result) return;
 
-  if (result.type === 'app') {
-    // 记录使用历史
-    invoke('record_app_usage', { appPath: result.path }).catch(() => {});
+    if (result.type === 'app') {
+      // 记录使用历史
+      invoke('record_app_usage', { appPath: result.path }).catch(() => {});
 
-    // 打开应用
-    await invoke('shell_open_path', { path: result.path });
-    // 隐藏窗口
-    await invoke('hide_main_window');
-    // 清空搜索
-    searchStore.clearSearch();
-    updateWindowSize();
-  } else if (result.type === 'plugin') {
-    // 进入插件模式
-    enterPlugin(result.plugin.id, result.feature.id);
+      // 打开应用
+      await invoke('shell_open_path', { path: result.path });
+      // 隐藏窗口
+      await invoke('hide_main_window');
+      // 清空搜索
+      searchStore.clearSearch();
+      updateWindowSize();
+    } else if (result.type === 'plugin') {
+      // 进入插件模式
+      enterPlugin(result.plugin.id, result.feature.id);
+    } else if (result.type === 'file') {
+      // 打开文件或文件夹
+      await invoke('shell_open_path', { path: result.path });
+      // 隐藏窗口
+      await invoke('hide_main_window');
+      // 清空搜索
+      searchStore.clearSearch();
+      updateWindowSize();
+    }
   }
-}
 
 // 进入插件模式
 function enterPlugin(pluginId: string, featureId: string) {
