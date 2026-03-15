@@ -1,0 +1,116 @@
+//! Volo - 桌面效率工具箱
+
+pub mod error;
+pub mod core;
+pub mod api;
+pub mod plugin;
+pub mod search;
+pub mod platform;
+
+use core::{Config, create_tray, ShortcutManager};
+use plugin::manager::PluginState;
+use api::database::Database;
+use search::app_cache::AppCache;
+use search::history::SearchHistoryManager;
+use tauri::Manager;
+
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    tauri::Builder::default()
+        // 初始化插件
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_positioner::init())
+        // 初始化状态
+        .setup(|app| {
+            // 初始化日志
+            tracing_subscriber::fmt()
+                .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+                .init();
+
+            // 配置
+            let config = Config::init(app.handle())?;
+            app.manage(config);
+
+            // 数据库
+            let db_path = app.path().app_data_dir()?.join("volo.db");
+            let db = Database::new(&db_path)?;
+            app.manage(db);
+
+            // 插件状态
+            let plugin_state = PluginState::new(app.handle())?;
+            app.manage(plugin_state);
+
+            // 应用缓存
+            let app_cache = AppCache::new(app.handle())?;
+            // 异步加载：先从数据库加载，后台扫描更新
+            app_cache.async_load();
+            app.manage(app_cache);
+
+            // 搜索历史
+            let history_path = app.path().app_data_dir()?.join("search_history.db");
+            let search_history = SearchHistoryManager::new(&history_path)?;
+            app.manage(search_history);
+
+            // 创建托盘
+            create_tray(app.handle())?;
+
+            // 注册快捷键
+            ShortcutManager::register_default(app.handle())?;
+
+            Ok(())
+        })
+        // 注册命令
+        .invoke_handler(tauri::generate_handler![
+            // 窗口
+            core::window::show_main_window,
+            core::window::hide_main_window,
+            core::window::toggle_main_window,
+            core::window::set_window_height,
+            // 配置
+            core::config::get_config,
+            core::config::save_config,
+            // 快捷键
+            core::shortcut::register_shortcut,
+            core::shortcut::unregister_shortcut,
+            // 剪贴板
+            api::clipboard_read_text,
+            api::clipboard_write_text,
+            // 数据库
+            api::database::db_put,
+            api::database::db_get,
+            api::database::db_remove,
+            api::database::db_all,
+            // 通知
+            api::notification::notification_show,
+            // Shell
+            api::shell::shell_open,
+            api::shell::shell_open_path,
+            // 搜索
+            search::app_search::search,
+            search::app_cache::refresh_app_cache,
+            search::app_cache::get_app_count,
+            search::app_cache::get_app_icon,
+            search::history::record_app_usage,
+            search::history::get_search_history,
+            search::history::clear_search_history,
+            // 插件
+            plugin::manager::list_plugins,
+            plugin::manager::get_plugin,
+            plugin::manager::scan_plugins,
+            plugin::manager::install_plugin,
+            plugin::manager::uninstall_plugin,
+            plugin::runner::get_plugin_runtime,
+            plugin::runner::get_plugin_html,
+            plugin::runner::get_plugin_asset_path,
+            plugin::runner::load_plugin,
+            plugin::runner::unload_plugin,
+        ])
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
+}

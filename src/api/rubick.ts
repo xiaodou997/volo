@@ -1,0 +1,199 @@
+/**
+ * Volo API 封装
+ * 提供给插件使用的 window.rubick API
+ */
+
+import { invoke } from '@tauri-apps/api/core';
+
+// ============ 类型定义 ============
+
+export interface Doc {
+  _id: string;
+  _rev?: string;
+  data: any;
+  updated_at?: number;
+}
+
+export interface NotificationOptions {
+  title?: string;
+  body: string;
+  icon?: string;
+}
+
+export interface AppConfig {
+  shortcut: string;
+  theme: 'system' | 'light' | 'dark';
+  hideOnBlur: boolean;
+  language: string;
+  showGuide: boolean;
+}
+
+export interface AppInfo {
+  name: string;
+  path: string;
+  icon?: string;
+  type: string;
+  pinyin?: string;
+  initials?: string;
+}
+
+export interface FeatureInfo {
+  id: string;
+  name: string;
+  keywords: string[];
+  icon?: string;
+  description?: string;
+}
+
+export interface PluginInfo {
+  id: string;
+  name: string;
+  path: string;
+  features: FeatureInfo[];
+  version?: string;
+  description?: string;
+  icon?: string;
+}
+
+export type SearchResult =
+  | { type: 'app'; name: string; path: string; icon?: string; pinyin?: string; initials?: string }
+  | { type: 'plugin'; plugin: PluginInfo; feature: FeatureInfo };
+
+// ============ Rubick API ============
+
+export interface RubickAPI {
+  // 生命周期钩子
+  hooks: {
+    onPluginEnter?: (data: { query: string }) => void;
+    onPluginReady?: () => void;
+    onPluginOut?: () => void;
+    onShow?: () => void;
+    onHide?: () => void;
+    onSubInputChange?: (text: string) => void;
+  };
+
+  // 窗口
+  window: {
+    hide: () => Promise<void>;
+    show: () => Promise<void>;
+    setSize: (height: number | { height: number; width?: number }) => Promise<void>;
+  };
+
+  // 剪贴板
+  clipboard: {
+    readText: () => Promise<string>;
+    writeText: (text: string) => Promise<void>;
+  };
+
+  // 数据库
+  db: {
+    put: (id: string, data: any) => Promise<Doc>;
+    get: (id: string) => Promise<Doc | null>;
+    remove: (id: string) => Promise<void>;
+    all: () => Promise<Doc[]>;
+  };
+
+  // 简化存储
+  storage: {
+    set: (key: string, value: any) => Promise<void>;
+    get: (key: string) => Promise<any>;
+    remove: (key: string) => Promise<void>;
+  };
+
+  // 通知
+  notification: {
+    show: (options: NotificationOptions | string) => Promise<void>;
+  };
+
+  // Shell
+  shell: {
+    open: (url: string) => Promise<void>;
+    openPath: (path: string) => Promise<void>;
+  };
+
+  // 系统
+  system: {
+    platform: 'macos' | 'windows' | 'linux';
+    darkMode: boolean;
+    version: string;
+  };
+}
+
+// ============ API 实现 ============
+
+const rubick: RubickAPI = {
+  hooks: {},
+
+  window: {
+    hide: () => invoke('hide_main_window'),
+    show: () => invoke('show_main_window'),
+    setSize: async (height) => {
+      const h = typeof height === 'number' ? height : height.height;
+      return invoke('set_window_height', { height: h });
+    },
+  },
+
+  clipboard: {
+    readText: () => invoke('clipboard_read_text'),
+    writeText: (text) => invoke('clipboard_write_text', { text }),
+  },
+
+  db: {
+    put: (id, data) => invoke('db_put', { id, data }),
+    get: (id) => invoke('db_get', { id }),
+    remove: (id) => invoke('db_remove', { id }),
+    all: () => invoke('db_all'),
+  },
+
+  storage: {
+    set: async (key, value) => {
+      await invoke('db_put', { id: key, data: value });
+    },
+    get: async (key) => {
+      const doc = await invoke<Doc | null>('db_get', { id: key });
+      return doc?.data ?? null;
+    },
+    remove: (key) => invoke('db_remove', { id: key }),
+  },
+
+  notification: {
+    show: (options) => {
+      const opts = typeof options === 'string' 
+        ? { body: options } 
+        : options;
+      return invoke('notification_show', { options: opts });
+    },
+  },
+
+  shell: {
+    open: (url) => invoke('shell_open', { url }),
+    openPath: (path) => invoke('shell_open_path', { path }),
+  },
+
+  system: {
+    get platform() {
+      const p = navigator.platform.toLowerCase();
+      if (p.includes('mac')) return 'macos';
+      if (p.includes('win')) return 'windows';
+      return 'linux';
+    },
+    get darkMode() {
+      return window.matchMedia('(prefers-color-scheme: dark)').matches;
+    },
+    get version() {
+      return '0.1.0';
+    },
+  },
+};
+
+// ============ 挂载到全局 ============
+
+declare global {
+  interface Window {
+    rubick: RubickAPI;
+  }
+}
+
+window.rubick = rubick;
+
+export default rubick;
