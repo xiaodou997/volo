@@ -1,0 +1,16 @@
+{
+  "id": "clipboard-history",
+  "name": "剪贴板历史",
+  "version": "1.0.0",
+  "description": "管理剪贴板历史记录",
+  "author": "Volo",
+  "main": "index.html",
+  "features": [
+    {
+      "id": "clipboard",
+      "name": "剪贴板历史",
+      "keywords": ["clipboard", "剪贴板", "历史", "粘贴"]
+    }
+  ],
+  "permissions": ["clipboard.read", "clipboard.write", "db.read", "db.write"]
+}

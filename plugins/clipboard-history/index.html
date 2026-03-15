@@ -1,0 +1,407 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>剪贴板历史</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      font-size: 14px;
+      line-height: 1.5;
+      background: var(--bg-primary, #ffffff);
+      color: var(--text-primary, #1d1d1f);
+      overflow: hidden;
+    }
+
+    .container {
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border-color, #e5e5e7);
+      background: var(--bg-secondary, #f5f5f7);
+    }
+
+    .title {
+      font-size: 16px;
+      font-weight: 600;
+    }
+
+    .actions {
+      display: flex;
+      gap: 8px;
+    }
+
+    .btn {
+      padding: 6px 12px;
+      font-size: 13px;
+      border: 1px solid var(--border-color, #e5e5e7);
+      border-radius: 6px;
+      background: var(--bg-primary, #ffffff);
+      color: var(--text-primary, #1d1d1f);
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .btn:hover {
+      background: var(--bg-hover, #f0f0f2);
+    }
+
+    .btn-danger {
+      color: #ff3b30;
+      border-color: #ff3b30;
+    }
+
+    .btn-danger:hover {
+      background: #ff3b30;
+      color: white;
+    }
+
+    .list {
+      flex: 1;
+      overflow-y: auto;
+      padding: 8px;
+    }
+
+    .item {
+      display: flex;
+      align-items: center;
+      padding: 12px;
+      margin-bottom: 8px;
+      border: 1px solid var(--border-color, #e5e5e7);
+      border-radius: 8px;
+      background: var(--bg-primary, #ffffff);
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .item:hover {
+      background: var(--bg-hover, #f0f0f2);
+      border-color: var(--accent-color, #007aff);
+    }
+
+    .item-content {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .item-text {
+      font-size: 14px;
+      color: var(--text-primary, #1d1d1f);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .item-meta {
+      font-size: 12px;
+      color: var(--text-tertiary, #86868b);
+      margin-top: 4px;
+    }
+
+    .item-actions {
+      display: flex;
+      gap: 8px;
+      margin-left: 12px;
+    }
+
+    .item-btn {
+      padding: 4px 8px;
+      font-size: 12px;
+      border: 1px solid var(--border-color, #e5e5e7);
+      border-radius: 4px;
+      background: transparent;
+      color: var(--text-secondary, #6e6e73);
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .item-btn:hover {
+      background: var(--accent-color, #007aff);
+      color: white;
+      border-color: var(--accent-color, #007aff);
+    }
+
+    .empty {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 200px;
+      color: var(--text-tertiary, #86868b);
+    }
+
+    .empty-icon {
+      font-size: 48px;
+      margin-bottom: 12px;
+    }
+
+    .preview {
+      padding: 12px;
+      border-top: 1px solid var(--border-color, #e5e5e7);
+      background: var(--bg-secondary, #f5f5f7);
+      max-height: 150px;
+      overflow-y: auto;
+    }
+
+    .preview-label {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-secondary, #6e6e73);
+      margin-bottom: 8px;
+    }
+
+    .preview-content {
+      font-size: 13px;
+      color: var(--text-primary, #1d1d1f);
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+
+    /* 暗色主题 */
+    @media (prefers-color-scheme: dark) {
+      body {
+        --bg-primary: #1c1c1e;
+        --bg-secondary: #2c2c2e;
+        --bg-hover: #3a3a3c;
+        --text-primary: #f5f5f7;
+        --text-secondary: #a1a1a6;
+        --text-tertiary: #6e6e73;
+        --border-color: #38383a;
+        --accent-color: #0a84ff;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <div class="title">剪贴板历史</div>
+      <div class="actions">
+        <button class="btn" onclick="refreshList()">刷新</button>
+        <button class="btn btn-danger" onclick="clearAll()">清空</button>
+      </div>
+    </div>
+
+    <div class="list" id="list">
+      <div class="empty">
+        <div class="empty-icon">📋</div>
+        <div>暂无剪贴板记录</div>
+      </div>
+    </div>
+
+    <div class="preview" id="preview" style="display: none;">
+      <div class="preview-label">预览</div>
+      <div class="preview-content" id="previewContent"></div>
+    </div>
+  </div>
+
+  <script>
+    let clipboardHistory = [];
+    let selectedIndex = -1;
+
+    // 初始化
+    async function init() {
+      await loadHistory();
+      renderList();
+      
+      // 监听剪贴板变化
+      if (window.rubick) {
+        // 每秒检查一次剪贴板
+        setInterval(checkClipboard, 1000);
+      }
+    }
+
+    // 加载历史记录
+    async function loadHistory() {
+      try {
+        const data = await rubick.storage.get('clipboard_history');
+        if (data) {
+          clipboardHistory = data;
+        }
+      } catch (e) {
+        console.error('Failed to load history:', e);
+      }
+    }
+
+    // 保存历史记录
+    async function saveHistory() {
+      try {
+        await rubick.storage.set('clipboard_history', clipboardHistory);
+      } catch (e) {
+        console.error('Failed to save history:', e);
+      }
+    }
+
+    // 检查剪贴板
+    let lastText = '';
+    async function checkClipboard() {
+      try {
+        const text = await rubick.clipboard.readText();
+        if (text && text !== lastText) {
+          lastText = text;
+          await addItem(text);
+        }
+      } catch (e) {
+        // 忽略错误
+      }
+    }
+
+    // 添加项目
+    async function addItem(text) {
+      // 检查是否已存在
+      const existingIndex = clipboardHistory.findIndex(item => item.text === text);
+      if (existingIndex !== -1) {
+        // 移动到顶部
+        const item = clipboardHistory.splice(existingIndex, 1)[0];
+        item.time = Date.now();
+        clipboardHistory.unshift(item);
+      } else {
+        // 添加新项目
+        clipboardHistory.unshift({
+          id: Date.now().toString(),
+          text: text,
+          time: Date.now()
+        });
+        
+        // 限制数量
+        if (clipboardHistory.length > 100) {
+          clipboardHistory = clipboardHistory.slice(0, 100);
+        }
+      }
+      
+      await saveHistory();
+      renderList();
+    }
+
+    // 渲染列表
+    function renderList() {
+      const listEl = document.getElementById('list');
+      
+      if (clipboardHistory.length === 0) {
+        listEl.innerHTML = `
+          <div class="empty">
+            <div class="empty-icon">📋</div>
+            <div>暂无剪贴板记录</div>
+          </div>
+        `;
+        return;
+      }
+      
+      listEl.innerHTML = clipboardHistory.map((item, index) => {
+        const timeStr = formatTime(item.time);
+        const preview = item.text.length > 50 ? item.text.substring(0, 50) + '...' : item.text;
+        
+        return `
+          <div class="item" onclick="selectItem(${index})" onmouseenter="showPreview(${index})">
+            <div class="item-content">
+              <div class="item-text">${escapeHtml(preview)}</div>
+              <div class="item-meta">${timeStr}</div>
+            </div>
+            <div class="item-actions">
+              <button class="item-btn" onclick="copyItem(${index}, event)">复制</button>
+              <button class="item-btn" onclick="deleteItem(${index}, event)">删除</button>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    // 选择项目
+    async function selectItem(index) {
+      const item = clipboardHistory[index];
+      if (item) {
+        await rubick.clipboard.writeText(item.text);
+        rubick.window.hide();
+      }
+    }
+
+    // 显示预览
+    function showPreview(index) {
+      const item = clipboardHistory[index];
+      if (item) {
+        const previewEl = document.getElementById('preview');
+        const contentEl = document.getElementById('previewContent');
+        contentEl.textContent = item.text;
+        previewEl.style.display = 'block';
+      }
+    }
+
+    // 复制项目
+    async function copyItem(index, event) {
+      event.stopPropagation();
+      const item = clipboardHistory[index];
+      if (item) {
+        await rubick.clipboard.writeText(item.text);
+        rubick.notification.show('已复制到剪贴板');
+      }
+    }
+
+    // 删除项目
+    async function deleteItem(index, event) {
+      event.stopPropagation();
+      clipboardHistory.splice(index, 1);
+      await saveHistory();
+      renderList();
+      
+      // 隐藏预览
+      document.getElementById('preview').style.display = 'none';
+    }
+
+    // 清空所有
+    async function clearAll() {
+      if (confirm('确定要清空所有剪贴板历史吗？')) {
+        clipboardHistory = [];
+        await saveHistory();
+        renderList();
+        document.getElementById('preview').style.display = 'none';
+      }
+    }
+
+    // 刷新列表
+    function refreshList() {
+      renderList();
+    }
+
+    // 格式化时间
+    function formatTime(timestamp) {
+      const date = new Date(timestamp);
+      const now = new Date();
+      const diff = now - date;
+      
+      if (diff < 60000) {
+        return '刚刚';
+      } else if (diff < 3600000) {
+        return Math.floor(diff / 60000) + '分钟前';
+      } else if (diff < 86400000) {
+        return Math.floor(diff / 3600000) + '小时前';
+      } else {
+        return date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      }
+    }
+
+    // 转义 HTML
+    function escapeHtml(text) {
+      const div = document.createElement('div');
+      div.textContent = text;
+      return div.innerHTML;
+    }
+
+    // 启动
+    init();
+  </script>
+</body>
+</html>

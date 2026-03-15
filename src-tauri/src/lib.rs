@@ -7,7 +7,7 @@ pub mod plugin;
 pub mod search;
 pub mod platform;
 
-use core::{Config, create_tray, ShortcutManager};
+use core::{Config, create_tray, ShortcutManager, ClipboardHistory};
 use plugin::manager::PluginState;
 use api::database::Database;
 use search::app_cache::AppCache;
@@ -73,6 +73,12 @@ pub fn run() {
             }
             app.manage(file_searcher);
 
+            // 剪贴板历史
+            let clipboard_history = ClipboardHistory::new();
+            clipboard_history.load(app.handle())?;
+            clipboard_history.start_monitoring(app.handle().clone());
+            app.manage(clipboard_history);
+
             // 创建托盘
             create_tray(app.handle())?;
 
@@ -136,6 +142,11 @@ pub fn run() {
             search::file_search::file_search,
             search::file_search::file_index,
             search::file_search::file_index_status,
+            // 剪贴板历史
+            core::clipboard_history::clipboard_history_get_all,
+            core::clipboard_history::clipboard_history_remove,
+            core::clipboard_history::clipboard_history_clear,
+            core::clipboard_history::clipboard_history_save,
             // 插件
             plugin::manager::list_plugins,
             plugin::manager::get_plugin,
