@@ -1,13 +1,19 @@
 {
   "name": "volo",
   "private": true,
-  "version": "0.1.0",
+  "version": "1.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc --noEmit && vite build",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build",
+    "release": "./scripts/build-release.sh",
+    "release:mac": "tauri build --target universal-apple-darwin",
+    "release:win": "tauri build --target x86_64-pc-windows-msvc",
+    "release:linux": "tauri build --target x86_64-unknown-linux-gnu"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.10.1",
