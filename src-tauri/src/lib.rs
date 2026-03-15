@@ -7,13 +7,7 @@ pub mod plugin;
 pub mod search;
 pub mod platform;
 
-use core::{Config, create_tray, ShortcutManager, ClipboardHistory};
-use plugin::manager::PluginState;
-use api::database::Database;
-use search::app_cache::AppCache;
-use search::history::SearchHistoryManager;
-use search::file_index::FileIndex;
-use tauri::Manager;
+use core::StartupManager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -34,53 +28,13 @@ pub fn run() {
                 .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
                 .init();
 
-            // 配置
-            let config = Config::init(app.handle())?;
-            app.manage(config);
-
-            // 数据库
-            let db_path = app.path().app_data_dir()?.join("volo.db");
-            let db = Database::new(&db_path)?;
-            app.manage(db);
-
-            // 插件状态
-            let plugin_state = PluginState::new(app.handle())?;
-            app.manage(plugin_state);
-
-            // 应用缓存
-            let app_cache = AppCache::new(app.handle())?;
-            // 异步加载：先从数据库加载，后台扫描更新
-            app_cache.async_load();
-            app.manage(app_cache);
-
-            // 搜索历史
-            let history_path = app.path().app_data_dir()?.join("search_history.db");
-            let search_history = SearchHistoryManager::new(&history_path)?;
-            app.manage(search_history);
-
-            // 快捷键管理器
-            let shortcut_manager = ShortcutManager::new();
-            app.manage(shortcut_manager);
-
-            // 文件索引（新的优化版本）
-            let file_index = FileIndex::new(&app.path().app_data_dir()?)?;
-            // 先加载现有索引
-            let _ = file_index.get_stats();
-            // 启动后台增量索引
-            file_index.start_background_index();
-            app.manage(file_index);
-
-            // 剪贴板历史
-            let clipboard_history = ClipboardHistory::new();
-            clipboard_history.load(app.handle())?;
-            clipboard_history.start_monitoring(app.handle().clone());
-            app.manage(clipboard_history);
-
-            // 创建托盘
-            create_tray(app.handle())?;
-
-            // 注册快捷键
-            ShortcutManager::register_default(app.handle())?;
+            // 使用优化的启动流程
+            let app_handle = app.handle().clone();
+            tauri::async_runtime::block_on(async move {
+                if let Err(e) = StartupManager::optimized_startup(&app_handle).await {
+                    tracing::error!("Startup failed: {}", e);
+                }
+            });
 
             Ok(())
         })

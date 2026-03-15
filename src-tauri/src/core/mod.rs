@@ -6,9 +6,11 @@ pub mod shortcut;
 pub mod tray;
 pub mod config;
 pub mod clipboard_history;
+pub mod startup;
 
 pub use window::WindowManager;
 pub use shortcut::ShortcutManager;
 pub use tray::create_tray;
 pub use config::Config;
 pub use clipboard_history::ClipboardHistory;
+pub use startup::StartupManager;
