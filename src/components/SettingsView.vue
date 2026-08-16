@@ -143,6 +143,28 @@
         </div>
       </section>
 
+      <!-- 权限管理 -->
+      <section class="settings-section">
+        <h3 class="section-title">权限管理</h3>
+
+        <div v-if="grants.length === 0" class="grants-empty">
+          暂无已授权的插件权限
+        </div>
+
+        <div v-for="grant in grants" :key="grant.pluginId + ':' + grant.capability" class="setting-item">
+          <div class="setting-label">
+            <span class="label-text">
+              {{ grant.pluginId }}
+              <span class="grant-risk" :class="'grant-risk-' + grant.risk.toLowerCase()">{{ riskLabel(grant.risk) }}</span>
+            </span>
+            <span class="label-desc">{{ grant.description }} · {{ scopeLabel(grant.scope) }}</span>
+          </div>
+          <div class="setting-control">
+            <button class="danger-btn" @click="revokeGrant(grant)">撤销</button>
+          </div>
+        </div>
+      </section>
+
       <!-- 关于 -->
       <section class="settings-section">
         <h3 class="section-title">关于</h3>
@@ -161,6 +183,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
+import type { PermissionGrant, PermissionScope, RiskLevel } from '../api/rubick';
 
 const emit = defineEmits<{
   (e: 'back'): void;
@@ -310,6 +333,54 @@ async function refreshCache() {
   }
 }
 
+// ============ 权限管理 ============
+
+// 已授权的插件权限
+const grants = ref<PermissionGrant[]>([]);
+
+const SCOPE_LABELS: Record<PermissionScope, string> = {
+  once: '仅一次',
+  session: '本次会话',
+  always: '始终允许',
+};
+
+const RISK_LABELS: Record<RiskLevel, string> = {
+  Low: '低风险',
+  Medium: '中风险',
+  High: '高风险',
+  Critical: '严重风险',
+};
+
+function scopeLabel(scope: PermissionScope): string {
+  return SCOPE_LABELS[scope] ?? scope;
+}
+
+function riskLabel(risk: RiskLevel): string {
+  return RISK_LABELS[risk] ?? risk;
+}
+
+// 加载授权列表
+async function loadGrants() {
+  try {
+    grants.value = await invoke<PermissionGrant[]>('permission_list_grants');
+  } catch (e) {
+    console.error('Failed to load permission grants:', e);
+  }
+}
+
+// 撤销授权
+async function revokeGrant(grant: PermissionGrant) {
+  try {
+    await invoke('permission_revoke', {
+      pluginId: grant.pluginId,
+      capability: grant.capability,
+    });
+    await loadGrants();
+  } catch (e) {
+    console.error('Failed to revoke permission:', e);
+  }
+}
+
 // 监听系统主题变化
 const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
 function handleSystemThemeChange() {
@@ -320,6 +391,7 @@ function handleSystemThemeChange() {
 
 onMounted(() => {
   loadSettings();
+  loadGrants();
   mediaQuery.addEventListener('change', handleSystemThemeChange);
 });
 
@@ -566,6 +638,37 @@ input[type="range"]::-webkit-slider-thumb {
 .danger-btn:hover {
   background: var(--danger-color);
   color: white;
+}
+
+/* 权限管理 */
+.grants-empty {
+  padding: 12px 0;
+  font-size: 13px;
+  color: var(--text-tertiary);
+}
+
+.grant-risk {
+  margin-left: 6px;
+  padding: 1px 6px;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 8px;
+}
+
+.grant-risk-low {
+  background: rgba(52, 199, 89, 0.15);
+  color: #34c759;
+}
+
+.grant-risk-medium {
+  background: rgba(255, 159, 10, 0.15);
+  color: #ff9f0a;
+}
+
+.grant-risk-high,
+.grant-risk-critical {
+  background: rgba(255, 59, 48, 0.15);
+  color: #ff3b30;
 }
 
 /* 关于 */

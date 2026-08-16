@@ -2,8 +2,10 @@
 
 use serde::{Deserialize, Serialize};
 use tauri_plugin_dialog::DialogExt;
-use tauri::AppHandle;
+use tauri::{AppHandle, State};
+use crate::core::permission::{require, PermissionEngine};
 use crate::error::Result;
+use crate::plugin::manager::PluginState;
 use base64::Engine;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -30,7 +32,15 @@ pub struct FileFilter {
 
 /// 读取文本文件
 #[tauri::command]
-pub async fn fs_read(path: String) -> Result<String> {
+pub async fn fs_read(
+    app: AppHandle,
+    engine: State<'_, PermissionEngine>,
+    plugins: State<'_, PluginState>,
+    plugin_id: Option<String>,
+    path: String,
+) -> Result<String> {
+    require(&app, &engine, &plugins, plugin_id.as_deref(), "fs.read", Some(&path)).await?;
+
     let content = tokio::fs::read_to_string(&path).await
         .map_err(|e| crate::error::VoloError::Other(e.to_string()))?;
     Ok(content)
@@ -38,7 +48,15 @@ pub async fn fs_read(path: String) -> Result<String> {
 
 /// 读取二进制文件（返回 base64）
 #[tauri::command]
-pub async fn fs_read_binary(path: String) -> Result<String> {
+pub async fn fs_read_binary(
+    app: AppHandle,
+    engine: State<'_, PermissionEngine>,
+    plugins: State<'_, PluginState>,
+    plugin_id: Option<String>,
+    path: String,
+) -> Result<String> {
+    require(&app, &engine, &plugins, plugin_id.as_deref(), "fs.read", Some(&path)).await?;
+
     let content = tokio::fs::read(&path).await
         .map_err(|e| crate::error::VoloError::Other(e.to_string()))?;
     let base64 = base64::engine::general_purpose::STANDARD.encode(&content);
@@ -47,7 +65,16 @@ pub async fn fs_read_binary(path: String) -> Result<String> {
 
 /// 写入文本文件
 #[tauri::command]
-pub async fn fs_write(path: String, content: String) -> Result<()> {
+pub async fn fs_write(
+    app: AppHandle,
+    engine: State<'_, PermissionEngine>,
+    plugins: State<'_, PluginState>,
+    plugin_id: Option<String>,
+    path: String,
+    content: String,
+) -> Result<()> {
+    require(&app, &engine, &plugins, plugin_id.as_deref(), "fs.write", Some(&path)).await?;
+
     // 确保父目录存在
     if let Some(parent) = std::path::Path::new(&path).parent() {
         tokio::fs::create_dir_all(parent).await
@@ -60,7 +87,16 @@ pub async fn fs_write(path: String, content: String) -> Result<()> {
 
 /// 写入二进制文件（从 base64）
 #[tauri::command]
-pub async fn fs_write_binary(path: String, content: String) -> Result<()> {
+pub async fn fs_write_binary(
+    app: AppHandle,
+    engine: State<'_, PermissionEngine>,
+    plugins: State<'_, PluginState>,
+    plugin_id: Option<String>,
+    path: String,
+    content: String,
+) -> Result<()> {
+    require(&app, &engine, &plugins, plugin_id.as_deref(), "fs.write", Some(&path)).await?;
+
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(&content)
         .map_err(|e| crate::error::VoloError::Other(e.to_string()))?;
@@ -78,7 +114,15 @@ pub async fn fs_write_binary(path: String, content: String) -> Result<()> {
 
 /// 检查文件是否存在
 #[tauri::command]
-pub async fn fs_exists(path: String) -> Result<bool> {
+pub async fn fs_exists(
+    app: AppHandle,
+    engine: State<'_, PermissionEngine>,
+    plugins: State<'_, PluginState>,
+    plugin_id: Option<String>,
+    path: String,
+) -> Result<bool> {
+    require(&app, &engine, &plugins, plugin_id.as_deref(), "fs.read", Some(&path)).await?;
+
     let exists = tokio::fs::try_exists(&path).await
         .map_err(|e| crate::error::VoloError::Other(e.to_string()))?;
     Ok(exists)
@@ -86,7 +130,15 @@ pub async fn fs_exists(path: String) -> Result<bool> {
 
 /// 创建目录
 #[tauri::command]
-pub async fn fs_mkdir(path: String) -> Result<()> {
+pub async fn fs_mkdir(
+    app: AppHandle,
+    engine: State<'_, PermissionEngine>,
+    plugins: State<'_, PluginState>,
+    plugin_id: Option<String>,
+    path: String,
+) -> Result<()> {
+    require(&app, &engine, &plugins, plugin_id.as_deref(), "fs.write", Some(&path)).await?;
+
     tokio::fs::create_dir_all(&path).await
         .map_err(|e| crate::error::VoloError::Other(e.to_string()))?;
     Ok(())
@@ -94,7 +146,15 @@ pub async fn fs_mkdir(path: String) -> Result<()> {
 
 /// 删除文件或目录
 #[tauri::command]
-pub async fn fs_remove(path: String) -> Result<()> {
+pub async fn fs_remove(
+    app: AppHandle,
+    engine: State<'_, PermissionEngine>,
+    plugins: State<'_, PluginState>,
+    plugin_id: Option<String>,
+    path: String,
+) -> Result<()> {
+    require(&app, &engine, &plugins, plugin_id.as_deref(), "fs.write", Some(&path)).await?;
+
     let meta = tokio::fs::metadata(&path).await
         .map_err(|e| crate::error::VoloError::Other(e.to_string()))?;
 
@@ -110,7 +170,15 @@ pub async fn fs_remove(path: String) -> Result<()> {
 
 /// 列出目录内容
 #[tauri::command]
-pub async fn fs_list(path: String) -> Result<Vec<FileInfo>> {
+pub async fn fs_list(
+    app: AppHandle,
+    engine: State<'_, PermissionEngine>,
+    plugins: State<'_, PluginState>,
+    plugin_id: Option<String>,
+    path: String,
+) -> Result<Vec<FileInfo>> {
+    require(&app, &engine, &plugins, plugin_id.as_deref(), "fs.read", Some(&path)).await?;
+
     let mut entries = tokio::fs::read_dir(&path).await
         .map_err(|e| crate::error::VoloError::Other(e.to_string()))?;
 
@@ -144,7 +212,15 @@ pub async fn fs_list(path: String) -> Result<Vec<FileInfo>> {
 
 /// 选择文件
 #[tauri::command]
-pub async fn fs_pick_file(app: AppHandle, options: Option<PickOptions>) -> Result<Option<String>> {
+pub async fn fs_pick_file(
+    app: AppHandle,
+    engine: State<'_, PermissionEngine>,
+    plugins: State<'_, PluginState>,
+    plugin_id: Option<String>,
+    options: Option<PickOptions>,
+) -> Result<Option<String>> {
+    require(&app, &engine, &plugins, plugin_id.as_deref(), "fs.pick", None).await?;
+
     let mut dialog = app.dialog().file();
 
     // 添加过滤器
@@ -163,7 +239,15 @@ pub async fn fs_pick_file(app: AppHandle, options: Option<PickOptions>) -> Resul
 
 /// 选择多个文件
 #[tauri::command]
-pub async fn fs_pick_files(app: AppHandle, options: Option<PickOptions>) -> Result<Vec<String>> {
+pub async fn fs_pick_files(
+    app: AppHandle,
+    engine: State<'_, PermissionEngine>,
+    plugins: State<'_, PluginState>,
+    plugin_id: Option<String>,
+    options: Option<PickOptions>,
+) -> Result<Vec<String>> {
+    require(&app, &engine, &plugins, plugin_id.as_deref(), "fs.pick", None).await?;
+
     let mut dialog = app.dialog().file();
 
     if let Some(opts) = options {
@@ -181,7 +265,14 @@ pub async fn fs_pick_files(app: AppHandle, options: Option<PickOptions>) -> Resu
 
 /// 选择文件夹
 #[tauri::command]
-pub async fn fs_pick_folder(app: AppHandle) -> Result<Option<String>> {
+pub async fn fs_pick_folder(
+    app: AppHandle,
+    engine: State<'_, PermissionEngine>,
+    plugins: State<'_, PluginState>,
+    plugin_id: Option<String>,
+) -> Result<Option<String>> {
+    require(&app, &engine, &plugins, plugin_id.as_deref(), "fs.pick", None).await?;
+
     let folder_path = app.dialog().file().blocking_pick_folder();
     Ok(folder_path.map(|p| p.to_string()))
 }

@@ -87,6 +87,10 @@ impl StartupManager {
         let db = Database::new(&db_path)?;
         app.manage(db);
 
+        // 权限引擎（加载持久化授权、打开审计库）
+        let engine = crate::core::permission::PermissionEngine::init(app)?;
+        app.manage(engine);
+
         Ok(())
     }
 

@@ -82,6 +82,10 @@ pub fn run() {
             // Shell
             api::shell::shell_open,
             api::shell::shell_open_path,
+            // 权限
+            core::permission::permission_respond,
+            core::permission::permission_list_grants,
+            core::permission::permission_revoke,
             // 搜索
             search::app_search::search,
             search::app_cache::refresh_app_cache,

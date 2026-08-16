@@ -1,11 +1,21 @@
 //! 截图 API
 
+use tauri::{AppHandle, State};
+use crate::core::permission::{require, PermissionEngine};
 use crate::error::{Result, VoloError};
+use crate::plugin::manager::PluginState;
 use base64::Engine;
 
 /// 截取屏幕
 #[tauri::command]
-pub async fn screen_capture() -> Result<String> {
+pub async fn screen_capture(
+    app: AppHandle,
+    engine: State<'_, PermissionEngine>,
+    plugins: State<'_, PluginState>,
+    plugin_id: Option<String>,
+) -> Result<String> {
+    require(&app, &engine, &plugins, plugin_id.as_deref(), "screen.capture", None).await?;
+
     #[cfg(target_os = "macos")]
     {
         // 使用 screencapture 命令
@@ -62,7 +72,14 @@ pub async fn screen_capture() -> Result<String> {
 
 /// 截取选定区域
 #[tauri::command]
-pub async fn screen_capture_area() -> Result<String> {
+pub async fn screen_capture_area(
+    app: AppHandle,
+    engine: State<'_, PermissionEngine>,
+    plugins: State<'_, PluginState>,
+    plugin_id: Option<String>,
+) -> Result<String> {
+    require(&app, &engine, &plugins, plugin_id.as_deref(), "screen.capture", None).await?;
+
     #[cfg(target_os = "macos")]
     {
         // 使用 screencapture -s 让用户选择区域

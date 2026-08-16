@@ -1,27 +1,51 @@
 //! 剪贴板 API
 
-use tauri::AppHandle;
+use tauri::{AppHandle, State};
 use tauri_plugin_clipboard_manager::ClipboardExt;
+use crate::core::permission::{require, PermissionEngine};
 use crate::error::Result;
+use crate::plugin::manager::PluginState;
 use base64::Engine;
 
 /// 读取剪贴板文本
 #[tauri::command]
-pub async fn clipboard_read_text(app: AppHandle) -> Result<String> {
+pub async fn clipboard_read_text(
+    app: AppHandle,
+    engine: State<'_, PermissionEngine>,
+    plugins: State<'_, PluginState>,
+    plugin_id: Option<String>,
+) -> Result<String> {
+    require(&app, &engine, &plugins, plugin_id.as_deref(), "clipboard.read", None).await?;
+
     app.clipboard().read_text()
         .map_err(|e| crate::error::VoloError::Other(e.to_string()))
 }
 
 /// 写入剪贴板文本
 #[tauri::command]
-pub async fn clipboard_write_text(app: AppHandle, text: String) -> Result<()> {
+pub async fn clipboard_write_text(
+    app: AppHandle,
+    engine: State<'_, PermissionEngine>,
+    plugins: State<'_, PluginState>,
+    plugin_id: Option<String>,
+    text: String,
+) -> Result<()> {
+    require(&app, &engine, &plugins, plugin_id.as_deref(), "clipboard.write", None).await?;
+
     app.clipboard().write_text(&text)
         .map_err(|e| crate::error::VoloError::Other(e.to_string()))
 }
 
 /// 读取剪贴板图片（返回 base64）
 #[tauri::command]
-pub async fn clipboard_read_image(_app: AppHandle) -> Result<Option<String>> {
+pub async fn clipboard_read_image(
+    app: AppHandle,
+    engine: State<'_, PermissionEngine>,
+    plugins: State<'_, PluginState>,
+    plugin_id: Option<String>,
+) -> Result<Option<String>> {
+    require(&app, &engine, &plugins, plugin_id.as_deref(), "clipboard.read", None).await?;
+
     #[cfg(target_os = "macos")]
     {
         // 使用 pngpaste 读取剪贴板图片
@@ -46,7 +70,15 @@ pub async fn clipboard_read_image(_app: AppHandle) -> Result<Option<String>> {
 
 /// 写入图片到剪贴板（从 base64）
 #[tauri::command]
-pub async fn clipboard_write_image(_app: AppHandle, base64: String) -> Result<()> {
+pub async fn clipboard_write_image(
+    app: AppHandle,
+    engine: State<'_, PermissionEngine>,
+    plugins: State<'_, PluginState>,
+    plugin_id: Option<String>,
+    base64: String,
+) -> Result<()> {
+    require(&app, &engine, &plugins, plugin_id.as_deref(), "clipboard.write", None).await?;
+
     // 移除 data:image/xxx;base64, 前缀
     let base64_data = if base64.contains(",") {
         base64.split(",").nth(1).unwrap_or(&base64)
@@ -90,7 +122,14 @@ pub async fn clipboard_write_image(_app: AppHandle, base64: String) -> Result<()
 
 /// 读取剪贴板文件列表
 #[tauri::command]
-pub async fn clipboard_read_files() -> Result<Vec<String>> {
+pub async fn clipboard_read_files(
+    app: AppHandle,
+    engine: State<'_, PermissionEngine>,
+    plugins: State<'_, PluginState>,
+    plugin_id: Option<String>,
+) -> Result<Vec<String>> {
+    require(&app, &engine, &plugins, plugin_id.as_deref(), "clipboard.read", None).await?;
+
     #[cfg(target_os = "macos")]
     {
         // 使用 osascript 读取剪贴板文件

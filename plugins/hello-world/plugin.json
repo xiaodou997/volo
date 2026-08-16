@@ -20,6 +20,6 @@
   ],
   "permissions": [
     "clipboard.write",
-    "notification"
+    "notification.show"
   ]
 }

@@ -12,6 +12,7 @@ import PluginView from './components/PluginView.vue';
 import SubInput from './components/SubInput.vue';
 import SettingsView from './components/SettingsView.vue';
 import PluginManager from './components/PluginManager.vue';
+import ApprovalDialog from './components/ApprovalDialog.vue';
 import { useSearchStore } from './stores/search';
 import './api/rubick';
 
@@ -278,6 +279,9 @@ onMounted(async () => {
         @sub-input-set-value="onSubInputSetValue"
       />
     </template>
+
+    <!-- 权限审批弹窗（全局，不受当前视图影响） -->
+    <ApprovalDialog />
   </div>
 </template>
 

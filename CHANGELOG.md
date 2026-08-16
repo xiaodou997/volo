@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] 1.1.0
+
+### Added
+- Capability Registry：系统能力统一登记，带风险分级（Low/Medium/High/Critical）
+- Permission Engine：allow/ask/deny 决策 × once/session/always 授权范围
+- 运行时权限审批弹窗：插件触发中高风险能力时需用户确认
+- 权限审计日志：Medium 及以上决策写入 audit.db（principal/capability/decision/scope/时间戳）
+- 设置页"权限管理"区块：查看与撤销已授予的权限
+- Always 授权持久化（permissions.json），Session 授权仅存活于内存
+
+### Changed
+- **安全边界重构**：插件 iframe 移除 `allow-same-origin`，插件 JS 不再能直接访问主窗口 `__TAURI__`
+- 插件 API 全部改经 postMessage 桥转发，调用方身份（pluginId）由宿主附加，插件无法伪造
+- 25 个插件面 API 命令接入统一权限守卫（`core/permission::require`）
+- db_* 命令改用验证后的调用方身份分库，修复插件可伪造他人 pluginId 读库的问题
+- 未在 plugin.json 声明的权限调用一律拒绝并记入审计
+
 ## [1.0.0] - 2024-03-15
 
 ### Added

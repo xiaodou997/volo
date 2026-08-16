@@ -12,5 +12,5 @@
       "keywords": ["clipboard", "剪贴板", "历史", "粘贴"]
     }
   ],
-  "permissions": ["clipboard.read", "clipboard.write", "db.read", "db.write"]
+  "permissions": ["clipboard.read", "clipboard.write", "db.read", "db.write", "notification.show"]
 }

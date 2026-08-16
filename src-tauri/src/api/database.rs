@@ -4,8 +4,10 @@ use rusqlite::{Connection, params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::Mutex;
-use tauri::State;
+use tauri::{AppHandle, State};
+use crate::core::permission::{require, PermissionEngine};
 use crate::error::{Result, VoloError};
+use crate::plugin::manager::PluginState;
 
 /// 文档结构
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -57,23 +59,31 @@ fn make_id(plugin_id: &str, id: &str) -> String {
 
 /// 存储文档
 #[tauri::command]
-pub fn db_put(
+pub async fn db_put(
+    app: AppHandle,
+    engine: State<'_, PermissionEngine>,
+    plugins: State<'_, PluginState>,
     db: State<'_, Database>,
-    plugin_id: String,
+    plugin_id: Option<String>,
     id: String,
     data: serde_json::Value,
 ) -> Result<Doc> {
+    require(&app, &engine, &plugins, plugin_id.as_deref(), "db.write", None).await?;
+
+    // 分库 key 以验证后的身份为准；主窗口自用归入 "system"
+    let principal = plugin_id.as_deref().unwrap_or("system");
+
     let conn = db.conn.lock()
         .map_err(|_| VoloError::Other("Database lock error".to_string()))?;
 
-    let full_id = make_id(&plugin_id, &id);
+    let full_id = make_id(principal, &id);
     let rev = uuid::Uuid::new_v4().to_string();
     let data_str = serde_json::to_string(&data)?;
     let updated_at = chrono::Utc::now().timestamp();
 
     conn.execute(
         "INSERT OR REPLACE INTO docs (id, plugin_id, rev, data, updated_at) VALUES (?1, ?2, ?3, ?4, ?5)",
-        params![full_id, plugin_id, &rev, data_str, updated_at],
+        params![full_id, principal, &rev, data_str, updated_at],
     )?;
 
     Ok(Doc {
@@ -86,15 +96,22 @@ pub fn db_put(
 
 /// 获取文档
 #[tauri::command]
-pub fn db_get(
+pub async fn db_get(
+    app: AppHandle,
+    engine: State<'_, PermissionEngine>,
+    plugins: State<'_, PluginState>,
     db: State<'_, Database>,
-    plugin_id: String,
+    plugin_id: Option<String>,
     id: String,
 ) -> Result<Option<Doc>> {
+    require(&app, &engine, &plugins, plugin_id.as_deref(), "db.read", None).await?;
+
+    let principal = plugin_id.as_deref().unwrap_or("system");
+
     let conn = db.conn.lock()
         .map_err(|_| VoloError::Other("Database lock error".to_string()))?;
 
-    let full_id = make_id(&plugin_id, &id);
+    let full_id = make_id(principal, &id);
 
     let mut stmt = conn.prepare(
         "SELECT id, rev, data, updated_at FROM docs WHERE id = ?1"
@@ -118,15 +135,22 @@ pub fn db_get(
 
 /// 删除文档
 #[tauri::command]
-pub fn db_remove(
+pub async fn db_remove(
+    app: AppHandle,
+    engine: State<'_, PermissionEngine>,
+    plugins: State<'_, PluginState>,
     db: State<'_, Database>,
-    plugin_id: String,
+    plugin_id: Option<String>,
     id: String,
 ) -> Result<()> {
+    require(&app, &engine, &plugins, plugin_id.as_deref(), "db.write", None).await?;
+
+    let principal = plugin_id.as_deref().unwrap_or("system");
+
     let conn = db.conn.lock()
         .map_err(|_| VoloError::Other("Database lock error".to_string()))?;
 
-    let full_id = make_id(&plugin_id, &id);
+    let full_id = make_id(principal, &id);
     conn.execute("DELETE FROM docs WHERE id = ?1", params![full_id])?;
 
     Ok(())
@@ -134,10 +158,17 @@ pub fn db_remove(
 
 /// 获取插件所有文档
 #[tauri::command]
-pub fn db_all(
+pub async fn db_all(
+    app: AppHandle,
+    engine: State<'_, PermissionEngine>,
+    plugins: State<'_, PluginState>,
     db: State<'_, Database>,
-    plugin_id: String,
+    plugin_id: Option<String>,
 ) -> Result<Vec<Doc>> {
+    require(&app, &engine, &plugins, plugin_id.as_deref(), "db.read", None).await?;
+
+    let principal = plugin_id.as_deref().unwrap_or("system");
+
     let conn = db.conn.lock()
         .map_err(|_| VoloError::Other("Database lock error".to_string()))?;
 
@@ -145,7 +176,7 @@ pub fn db_all(
         "SELECT id, rev, data, updated_at FROM docs WHERE plugin_id = ?1 ORDER BY updated_at DESC"
     )?;
 
-    let docs = stmt.query_map(params![plugin_id], |row| {
+    let docs = stmt.query_map(params![principal], |row| {
         // 从完整 ID 中提取原始 ID
         let full_id: String = row.get(0)?;
         let original_id = full_id.split(':').nth(1).unwrap_or(&full_id).to_string();

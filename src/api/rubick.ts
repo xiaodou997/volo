@@ -84,6 +84,33 @@ export interface FileFilter {
   extensions: string[];
 }
 
+// ============ 权限审批 ============
+
+// 风险等级（与 Rust 端 RiskLevel 对应）
+export type RiskLevel = 'Low' | 'Medium' | 'High' | 'Critical';
+
+// 授权范围
+export type PermissionScope = 'once' | 'session' | 'always';
+
+// permission-request 事件 payload
+export interface PermissionRequest {
+  requestId: string;
+  pluginId: string;
+  capability: string;
+  description: string;
+  risk: RiskLevel;
+  resource?: string;
+}
+
+// permission_list_grants 返回的授权记录
+export interface PermissionGrant {
+  pluginId: string;
+  capability: string;
+  scope: PermissionScope;
+  risk: RiskLevel;
+  description: string;
+}
+
 // ============ Rubick API ============
 
 export interface RubickAPI {
