@@ -3,7 +3,7 @@
  */
 
 <script setup lang="ts">
-import { computed, onMounted, ref, nextTick } from 'vue';
+import { computed, onMounted, ref, nextTick, watch } from 'vue';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { invoke } from '@tauri-apps/api/core';
 import SearchInput from './components/SearchInput.vue';
@@ -11,6 +11,7 @@ import ResultList from './components/ResultList.vue';
 import PluginView from './components/PluginView.vue';
 import SubInput from './components/SubInput.vue';
 import SettingsView from './components/SettingsView.vue';
+import AgentView from './components/AgentView.vue';
 import PluginManager from './components/PluginManager.vue';
 import ApprovalDialog from './components/ApprovalDialog.vue';
 import { useSearchStore } from './stores/search';
@@ -25,6 +26,8 @@ const searchStore = useSearchStore();
 const pluginMode = ref(false);
 const settingsMode = ref(false);
 const pluginManagerMode = ref(false);
+const agentMode = ref(false);
+const agentQuery = ref('');
 const currentPlugin = ref<{ pluginId: string; featureId: string } | null>(null);
 const pluginViewRef = ref<InstanceType<typeof PluginView> | null>(null);
 
@@ -39,6 +42,10 @@ const windowHeight = computed(() => {
 
   if (settingsMode.value) {
     return 450; // 设置模式固定高度
+  }
+
+  if (agentMode.value) {
+    return 420; // Agent 模式固定高度
   }
 
   if (pluginManagerMode.value) {
@@ -80,7 +87,10 @@ function handleInput(value: string) {
 
 // 处理清空
 function handleClear() {
-  if (settingsMode.value) {
+  if (agentMode.value) {
+    // 退出 Agent 模式（AgentView 卸载时自动 agent_cancel）
+    exitAgent();
+  } else if (settingsMode.value) {
     // 退出设置模式
     exitSettings();
   } else if (pluginManagerMode.value) {
@@ -128,8 +138,29 @@ function handleClear() {
       // 清空搜索
       searchStore.clearSearch();
       updateWindowSize();
+    } else if (result.type === 'ai') {
+      // 未配置 LLM 时引导去设置页，否则进入 Agent 模式
+      if (!searchStore.llmConfigured) {
+        enterSettings();
+      } else {
+        enterAgent(result.query);
+      }
     }
   }
+
+// 进入 Agent 模式
+function enterAgent(query: string) {
+  agentQuery.value = query;
+  agentMode.value = true;
+  updateWindowSize();
+}
+
+// 退出 Agent 模式（AgentView 卸载时自动 agent_cancel）
+function exitAgent() {
+  agentMode.value = false;
+  agentQuery.value = '';
+  updateWindowSize();
+}
 
 // 进入插件模式
 function enterPlugin(pluginId: string, featureId: string) {
@@ -216,11 +247,19 @@ async function updateWindowSize() {
   await invoke('set_window_height', { height });
 }
 
+// 搜索结果到达（防抖后异步）时重新计算窗口高度，
+// 否则单次输入（如粘贴一整段）会用空结果算出 60px，列表被裁掉
+watch(() => searchStore.results, () => {
+  if (!pluginMode.value && !settingsMode.value && !pluginManagerMode.value && !agentMode.value) {
+    updateWindowSize();
+  }
+});
+
 // 失焦隐藏
 onMounted(async () => {
   const unlisten = await mainWindow.onFocusChanged(({ payload }: { payload: boolean }) => {
-    if (!payload && !settingsMode.value && !pluginManagerMode.value && !pluginMode.value) {
-      // 失焦时隐藏（排除设置模式、插件管理模式和插件模式）
+    if (!payload && !settingsMode.value && !pluginManagerMode.value && !pluginMode.value && !agentMode.value) {
+      // 失焦时隐藏（排除设置模式、插件管理模式、插件模式和 Agent 模式）
       invoke('hide_main_window');
     }
   });
@@ -237,6 +276,11 @@ onMounted(async () => {
     <!-- 设置模式 -->
     <template v-if="settingsMode">
       <SettingsView @back="exitSettings" />
+    </template>
+
+    <!-- Agent 模式 -->
+    <template v-else-if="agentMode">
+      <AgentView :query="agentQuery" @exit="exitAgent" />
     </template>
 
     <!-- 插件管理模式 -->

@@ -57,11 +57,35 @@ export interface PluginInfo {
   description?: string;
 }
 
+// AI 查询伪结果（本地追加，不进 Rust 搜索）
+export interface AiQueryResult {
+  type: 'ai';
+  query: string;
+}
+
 export type SearchResult =
   | { type: 'app'; name: string; path: string; icon?: string; pinyin?: string; initials?: string }
   | { type: 'plugin'; plugin: PluginInfo; feature: FeatureInfo }
   | { type: 'command'; plugin: PluginInfo; command: CommandInfo }
-  | { type: 'file'; path: string; name: string; file_type: string; extension?: string };
+  | { type: 'file'; path: string; name: string; file_type: string; extension?: string }
+  | AiQueryResult;
+
+// ============ AI / Agent ============
+
+// LLM 配置（空字符串 = 未配置）
+export interface LlmConfig {
+  baseUrl: string;
+  model: string;
+}
+
+// agent-event 事件 payload
+export interface AgentEvent {
+  kind: 'message' | 'tool_call' | 'tool_result' | 'done' | 'error';
+  content?: string;
+  name?: string;
+  args?: any;
+  result?: string;
+}
 
 // 文件信息（来自索引）
 export interface FileInfo {

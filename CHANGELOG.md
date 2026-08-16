@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] 1.3.0
+
+### Added
+- AI 初体验：启动器"问 AI"入口 + 内置 Agent（OpenAI 兼容协议，OpenAI/DeepSeek/Ollama 均可接入）
+- Tool Registry：capability 暴露为 LLM function-calling 工具（clipboard_read / fs_read / notification_show）
+- Agent 工具调用走权限管道：principal `agent:builtin`，中高风险操作照常弹审批
+- LLM 配置：base_url/model/API key 均存本地 config.json（明文，简单通用、跨平台一致）
+- AgentView：工具调用时间线渲染，可取消会话
+- 设置页"AI 设置"区块
+
 ## [Unreleased] 1.2.0
 
 ### Added

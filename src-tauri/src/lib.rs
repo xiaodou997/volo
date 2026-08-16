@@ -6,6 +6,7 @@ pub mod api;
 pub mod plugin;
 pub mod search;
 pub mod platform;
+pub mod ai;
 
 use core::StartupManager;
 
@@ -48,6 +49,14 @@ pub fn run() {
             // 配置
             core::config::get_config,
             core::config::save_config,
+            core::config::llm_get_config,
+            core::config::llm_set_config,
+            // 凭证
+            core::config::llm_set_api_key,
+            core::config::llm_has_api_key,
+            // AI Agent
+            ai::agent::agent_ask,
+            ai::agent::agent_cancel,
             // 快捷键
             core::shortcut::register_shortcut,
             core::shortcut::unregister_shortcut,

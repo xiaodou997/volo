@@ -91,6 +91,9 @@ impl StartupManager {
         let engine = crate::core::permission::PermissionEngine::init(app)?;
         app.manage(engine);
 
+        // Agent 会话管理器（取消标志等轻量状态）
+        app.manage(crate::ai::agent::AgentManager::new());
+
         Ok(())
     }
 
@@ -157,6 +160,9 @@ impl StartupManager {
     /// 初始化 UI 相关
     async fn init_ui(app: &AppHandle) -> Result<(), crate::error::VoloError> {
         use crate::core::{create_tray, ShortcutManager};
+
+        // 原生菜单（macOS WebView 的复制粘贴快捷键依赖它）
+        crate::core::menu::setup_menu(app)?;
 
         // 创建托盘
         create_tray(app)?;

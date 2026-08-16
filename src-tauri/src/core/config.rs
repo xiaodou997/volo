@@ -21,6 +21,22 @@ pub struct AppConfig {
     pub language: String,
     /// 是否显示引导
     pub show_guide: bool,
+    /// LLM 配置（含 API key，明文存于本地配置文件）
+    #[serde(default)]
+    pub llm: LlmConfig,
+}
+
+/// LLM 配置；base_url/model/api_key 为空字符串表示未配置
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LlmConfig {
+    /// OpenAI 兼容服务地址（空则使用官方默认）
+    pub base_url: String,
+    /// 模型名
+    pub model: String,
+    /// API key（明文存于 config.json，注意勿外泄该文件）
+    #[serde(default)]
+    pub api_key: String,
 }
 
 impl Default for AppConfig {
@@ -31,6 +47,7 @@ impl Default for AppConfig {
             hide_on_blur: true,
             language: "zh-CN".to_string(),
             show_guide: true,
+            llm: LlmConfig::default(),
         }
     }
 }
@@ -99,4 +116,68 @@ pub fn get_config(config: tauri::State<'_, Config>) -> AppConfig {
 #[tauri::command]
 pub fn save_config(config: tauri::State<'_, Config>, new_config: AppConfig) -> Result<()> {
     config.save(new_config)
+}
+
+/// 获取 LLM 配置（含 API key 是否已配置的状态由 llm_has_api_key 单独查询；
+/// 注意：llm_get_config 返回的 LlmConfig 含 api_key 字段，前端不应回显）
+#[tauri::command]
+pub fn llm_get_config(config: tauri::State<'_, Config>) -> LlmConfig {
+    config.get().llm
+}
+
+/// 保存 LLM 配置（base_url/model），不影响已保存的 API key
+#[tauri::command]
+pub fn llm_set_config(
+    config: tauri::State<'_, Config>,
+    base_url: String,
+    model: String,
+) -> Result<()> {
+    let mut app_config = config.get();
+    app_config.llm.base_url = base_url;
+    app_config.llm.model = model;
+    config.save(app_config)
+}
+
+/// 保存 LLM API key（明文写入本地 config.json）
+#[tauri::command]
+pub fn llm_set_api_key(config: tauri::State<'_, Config>, key: String) -> Result<()> {
+    let mut app_config = config.get();
+    app_config.llm.api_key = key;
+    config.save(app_config)
+}
+
+/// 是否已配置 LLM API key
+#[tauri::command]
+pub fn llm_has_api_key(config: tauri::State<'_, Config>) -> bool {
+    !config.get().llm.api_key.trim().is_empty()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 旧版本 config.json 没有 llm 字段，必须能向后兼容解析
+    #[test]
+    fn test_legacy_config_without_llm_parses() {
+        let legacy = r#"{
+            "shortcut": "Alt+R",
+            "theme": "system",
+            "hideOnBlur": true,
+            "language": "zh-CN",
+            "showGuide": true
+        }"#;
+        let config: AppConfig = serde_json::from_str(legacy).unwrap();
+        assert_eq!(config.shortcut, "Alt+R");
+        assert_eq!(config.llm.base_url, "");
+        assert_eq!(config.llm.model, "");
+    }
+
+    #[test]
+    fn test_llm_config_camel_case_roundtrip() {
+        let config = AppConfig::default();
+        let json = serde_json::to_value(&config).unwrap();
+        assert!(json.get("llm").is_some());
+        assert_eq!(json["llm"]["baseUrl"], "");
+        assert_eq!(json["llm"]["model"], "");
+    }
 }

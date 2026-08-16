@@ -17,6 +17,7 @@
       class="search-input"
       :placeholder="placeholder"
       @input="onInput"
+      @paste="onPaste"
       @keydown="onKeydown"
     />
     <div v-if="modelValue" class="clear-btn" @click="onClear">
@@ -51,6 +52,15 @@ const inputRef = ref<HTMLInputElement>();
 function onInput(e: Event) {
   const target = e.target as HTMLInputElement;
   emit('update:modelValue', target.value);
+}
+
+// WKWebView 通过原生菜单粘贴时 input 事件不一定触发，粘贴后主动同步一次
+function onPaste() {
+  setTimeout(() => {
+    if (inputRef.value) {
+      emit('update:modelValue', inputRef.value.value);
+    }
+  }, 0);
 }
 
 function onKeydown(e: KeyboardEvent) {

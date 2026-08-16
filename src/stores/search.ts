@@ -5,7 +5,7 @@
 import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
-import type { SearchResult } from '../api/rubick';
+import type { LlmConfig, SearchResult } from '../api/rubick';
 
 export const useSearchStore = defineStore('search', () => {
   // 状态
@@ -13,6 +13,21 @@ export const useSearchStore = defineStore('search', () => {
   const results = ref<SearchResult[]>([]);
   const selectedIndex = ref(0);
   const loading = ref(false);
+
+  // LLM 配置缓存（初始化时拉一次，配置完整且有 API key 才显示"问 AI"入口）
+  const llmConfigured = ref(false);
+
+  async function refreshLlmStatus() {
+    try {
+      const config = await invoke<LlmConfig>('llm_get_config');
+      const hasKey = await invoke<boolean>('llm_has_api_key');
+      llmConfigured.value = !!config.baseUrl && !!config.model && hasKey;
+    } catch {
+      llmConfigured.value = false;
+    }
+  }
+
+  refreshLlmStatus();
 
   // 计算属性
   const hasResults = computed(() => results.value.length > 0);
@@ -34,7 +49,8 @@ export const useSearchStore = defineStore('search', () => {
     loading.value = true;
     try {
       const r = await invoke<SearchResult[]>('search', { query: q });
-      results.value = r;
+      // 始终追加"问 AI"伪结果（不进 Rust 搜索）；未配置时选中会引导去设置页
+      results.value = [...r, { type: 'ai', query: q }];
       selectedIndex.value = 0;
     } catch (e) {
       console.error('Search error:', e);
@@ -95,6 +111,8 @@ export const useSearchStore = defineStore('search', () => {
     loading,
     hasResults,
     selectedResult,
+    llmConfigured,
+    refreshLlmStatus,
     search,
     clearSearch,
     selectNext,

@@ -75,6 +75,19 @@
           <div class="result-subtitle">{{ result.file_type === 'directory' ? '文件夹' : result.extension || '文件' }}</div>
         </div>
       </template>
+      <!-- AI 查询结果 -->
+      <template v-else-if="result.type === 'ai'">
+        <div class="result-icon">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round">
+            <path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/>
+            <path d="M19 15l.9 2.1L22 18l-2.1.9L19 21l-.9-2.1L16 18l2.1-.9z"/>
+          </svg>
+        </div>
+        <div class="result-content">
+          <div class="result-title">问 AI</div>
+          <div class="result-subtitle">{{ searchStore.llmConfigured ? result.query : '未配置 LLM，回车前往设置' }}</div>
+        </div>
+      </template>
     </div>
   </div>
 </template>
@@ -82,7 +95,10 @@
 <script setup lang="ts">
 import { watch } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
+import { useSearchStore } from '../stores/search';
 import type { SearchResult } from '../api/rubick';
+
+const searchStore = useSearchStore();
 
 const props = defineProps<{
   results: SearchResult[];
@@ -103,6 +119,9 @@ function getKey(result: SearchResult, index: number): string {
   }
   if (result.type === 'command') {
     return `command-${result.plugin.id}-${result.command.id}-${index}`;
+  }
+  if (result.type === 'ai') {
+    return `ai-${result.query}`;
   }
   return `file-${result.path}-${index}`;
 }

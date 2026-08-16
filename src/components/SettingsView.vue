@@ -143,6 +143,60 @@
         </div>
       </section>
 
+      <!-- AI 设置 -->
+      <section class="settings-section">
+        <h3 class="section-title">AI 设置</h3>
+
+        <div class="setting-item">
+          <div class="setting-label">
+            <span class="label-text">Base URL</span>
+            <span class="label-desc">支持 OpenAI 兼容服务（如 DeepSeek）</span>
+          </div>
+          <div class="setting-control">
+            <input
+              type="text"
+              class="text-input"
+              v-model="llmConfig.baseUrl"
+              placeholder="https://api.openai.com/v1"
+              @blur="saveLlmConfig"
+            />
+          </div>
+        </div>
+
+        <div class="setting-item">
+          <div class="setting-label">
+            <span class="label-text">Model</span>
+            <span class="label-desc">模型名称</span>
+          </div>
+          <div class="setting-control">
+            <input
+              type="text"
+              class="text-input"
+              v-model="llmConfig.model"
+              placeholder="gpt-4o-mini / deepseek-chat"
+              @blur="saveLlmConfig"
+            />
+          </div>
+        </div>
+
+        <div class="setting-item">
+          <div class="setting-label">
+            <span class="label-text">API Key</span>
+            <span class="label-desc">明文保存在本地配置文件（config.json），请勿外泄该文件</span>
+          </div>
+          <div class="setting-control">
+            <span v-if="hasApiKey" class="api-key-ok">已配置 ✓</span>
+            <input
+              type="password"
+              class="text-input"
+              v-model="apiKeyInput"
+              placeholder="sk-..."
+            />
+            <button class="action-btn" @click="saveApiKey">保存</button>
+          </div>
+        </div>
+      </section>
+
       <!-- 权限管理 -->
       <section class="settings-section">
         <h3 class="section-title">权限管理</h3>
@@ -183,7 +237,8 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
-import type { PermissionGrant, PermissionScope, RiskLevel } from '../api/rubick';
+import { useSearchStore } from '../stores/search';
+import type { LlmConfig, PermissionGrant, PermissionScope, RiskLevel } from '../api/rubick';
 
 const emit = defineEmits<{
   (e: 'back'): void;
@@ -333,6 +388,51 @@ async function refreshCache() {
   }
 }
 
+// ============ AI 设置 ============
+
+const llmConfig = ref<LlmConfig>({ baseUrl: '', model: '' });
+const apiKeyInput = ref('');
+const hasApiKey = ref(false);
+
+// 加载 LLM 配置与 API key 状态
+async function loadLlmConfig() {
+  try {
+    const config = await invoke<LlmConfig>('llm_get_config');
+    llmConfig.value = { baseUrl: config.baseUrl ?? '', model: config.model ?? '' };
+    hasApiKey.value = await invoke<boolean>('llm_has_api_key');
+  } catch (e) {
+    console.error('Failed to load LLM config:', e);
+  }
+}
+
+// 保存 Base URL / Model（失焦时触发）
+async function saveLlmConfig() {
+  try {
+    await invoke('llm_set_config', {
+      baseUrl: llmConfig.value.baseUrl,
+      model: llmConfig.value.model,
+    });
+    useSearchStore().refreshLlmStatus();
+  } catch (e) {
+    console.error('Failed to save LLM config:', e);
+  }
+}
+
+// 保存 API Key（只写不回显）
+async function saveApiKey() {
+  const key = apiKeyInput.value.trim();
+  if (!key) return;
+  try {
+    await invoke('llm_set_api_key', { key });
+    apiKeyInput.value = '';
+    hasApiKey.value = true;
+    useSearchStore().refreshLlmStatus();
+  } catch (e) {
+    console.error('Failed to save API key:', e);
+    alert(`API Key 保存失败：${e}`);
+  }
+}
+
 // ============ 权限管理 ============
 
 // 已授权的插件权限
@@ -392,6 +492,7 @@ function handleSystemThemeChange() {
 onMounted(() => {
   loadSettings();
   loadGrants();
+  loadLlmConfig();
   mediaQuery.addEventListener('change', handleSystemThemeChange);
 });
 
@@ -638,6 +739,28 @@ input[type="range"]::-webkit-slider-thumb {
 .danger-btn:hover {
   background: var(--danger-color);
   color: white;
+}
+
+/* 文本输入框（AI 设置） */
+.text-input {
+  width: 200px;
+  padding: 6px 12px;
+  font-size: 13px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  outline: none;
+}
+
+.text-input:focus {
+  border-color: var(--accent-color);
+}
+
+.api-key-ok {
+  font-size: 12px;
+  color: #34c759;
+  white-space: nowrap;
 }
 
 /* 权限管理 */
