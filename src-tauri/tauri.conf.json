@@ -48,13 +48,7 @@
       "icons/icon.ico"
     ],
     "macOS": {
-      "minimumSystemVersion": "10.13",
-      "license": "../LICENSE",
-      "frameworks": [],
-      "exceptionDomain": "",
-      "signingIdentity": null,
-      "providerShortName": null,
-      "entitlements": null
+      "minimumSystemVersion": "10.13"
     },
     "windows": {
       "certificateThumbprint": null,
@@ -65,15 +59,10 @@
         "type": "downloadBootstrapper"
       },
       "nsis": {
-        "license": "../LICENSE",
-        "headerImage": null,
-        "sidebarImage": null,
-        "installerIcon": null,
         "installMode": "both"
       }
     },
     "linux": {
-      "license": "../LICENSE",
       "appimage": {
         "bundleMediaFramework": false
       },
