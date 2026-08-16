@@ -2,6 +2,10 @@
 //! Agent（Rust 侧）调用插件声明的 contributes.tools：
 //! emit `plugin-tool-call` 事件 → 前端沙箱执行插件 JS → `plugin_tool_result` 命令回传 →
 //! oneshot 唤醒等待中的工具调用。模式与 PermissionEngine 的审批往返一致。
+//!
+//! 命名空间约定：LLM 工具名 `mcp__` 前缀保留给 MCP server（见 ai::mcp），
+//! 插件 id `mcp` 是保留前缀（会与 MCP 命名空间冲突），加载时只打 warn 日志不阻断
+//! （见 plugin::manager::scan_plugins）。
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -20,6 +24,7 @@ use crate::error::{Result, VoloError};
 use crate::plugin::manager::PluginState;
 
 use super::agent::ToolExecutor;
+use super::mcp::{McpRegistry, MCP_NAME_PREFIX};
 use super::tools::{ToolRegistry, ToolSpec};
 
 /// 前端执行插件工具的超时时间
@@ -187,21 +192,26 @@ fn lookup_tool(
     None
 }
 
-/// 聚合执行器：命名空间名（含 `__`）走插件工具桥，其余走内置 ToolRegistry
-pub struct PluginToolExecutor<'a> {
+/// 聚合执行器，dispatch 顺序：
+/// `mcp__` 前缀 → MCP server；含 `__` → 插件工具桥；其余 → 内置 ToolRegistry
+pub struct AgentToolExecutor<'a> {
     pub app: &'a AppHandle,
     pub engine: &'a PermissionEngine,
     pub plugins: &'a PluginState,
     pub tool_state: &'a PluginToolState,
+    pub mcp: &'a McpRegistry,
 }
 
-impl ToolExecutor for PluginToolExecutor<'_> {
+impl ToolExecutor for AgentToolExecutor<'_> {
     fn execute<'a>(
         &'a self,
         name: &'a str,
         args: Value,
     ) -> Pin<Box<dyn Future<Output = Result<Value>> + Send + 'a>> {
         Box::pin(async move {
+            if name.starts_with(MCP_NAME_PREFIX) {
+                return self.mcp.call(name, args).await;
+            }
             match parse_llm_name(name) {
                 Some((plugin_id, tool_id)) => {
                     self.execute_plugin_tool(&plugin_id, &tool_id, args).await
@@ -212,7 +222,7 @@ impl ToolExecutor for PluginToolExecutor<'_> {
     }
 }
 
-impl PluginToolExecutor<'_> {
+impl AgentToolExecutor<'_> {
     /// 插件工具路径：查 manifest 确认工具存在 → 挂 oneshot → emit 事件 → 超时等待
     ///
     /// 出错/超时统一返回 Err，agent 循环会把错误文本作为 tool 结果回喂 LLM

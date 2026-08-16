@@ -12,7 +12,8 @@ use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use super::llm::{ChatBackend, Message, OpenAiBackend};
-use super::plugin_tools::{collect_specs, PluginToolExecutor, PluginToolState};
+use super::mcp::McpRegistry;
+use super::plugin_tools::{collect_specs, AgentToolExecutor, PluginToolState};
 use super::session::{cleanup_old_sessions, sessions_dir, SessionLog, SESSION_RETENTION_DAYS};
 use super::tools::{ToolRegistry, ToolSpec};
 use crate::core::config::Config;
@@ -304,18 +305,24 @@ pub fn agent_ask(
     };
 
     let app_handle = app.clone();
+    let mcp_servers = config.get().mcp_servers;
     tauri::async_runtime::spawn(async move {
         let engine = app_handle.state::<PermissionEngine>();
         let plugins = app_handle.state::<PluginState>();
         let tool_state = app_handle.state::<PluginToolState>();
-        // 工具规格 = 内置 + 插件贡献（contributes.tools）
+        let mcp = app_handle.state::<McpRegistry>();
+        // MCP server 连接（幂等，失败 warn + skip 不阻断会话）
+        mcp.connect_all(&mcp_servers).await;
+        // 工具规格 = 内置 + 插件贡献（contributes.tools）+ MCP
         let mut tools = ToolRegistry::specs();
         tools.extend(collect_specs(&plugins));
-        let executor = PluginToolExecutor {
+        tools.extend(mcp.specs());
+        let executor = AgentToolExecutor {
             app: &app_handle,
             engine: &engine,
             plugins: &plugins,
             tool_state: &tool_state,
+            mcp: &mcp,
         };
         let emit = |event: AgentEvent| {
             let _ = app_handle.emit("agent-event", &event);

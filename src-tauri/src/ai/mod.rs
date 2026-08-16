@@ -5,6 +5,7 @@
 
 pub mod agent;
 pub mod llm;
+pub mod mcp;
 pub mod plugin_tools;
 pub mod session;
 pub mod tools;

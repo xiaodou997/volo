@@ -131,6 +131,13 @@ pub fn run() {
             plugin::runner::load_plugin,
             plugin::runner::unload_plugin,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app_handle, event| {
+            // 退出时终止所有 MCP 子进程
+            if let tauri::RunEvent::Exit = event {
+                use tauri::Manager;
+                app_handle.state::<crate::ai::mcp::McpRegistry>().shutdown();
+            }
+        });
 }

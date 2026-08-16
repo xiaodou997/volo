@@ -97,6 +97,9 @@ impl StartupManager {
         // 插件工具桥（agent ↔ 前端沙箱的挂起调用）
         app.manage(crate::ai::plugin_tools::PluginToolState::new());
 
+        // MCP server 连接注册表（连接本身在首次 agent 会话时按需建立）
+        app.manage(crate::ai::mcp::McpRegistry::new());
+
         Ok(())
     }
 

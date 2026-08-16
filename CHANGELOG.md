@@ -1,9 +1,21 @@
 # Changelog
-
 All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased] 1.6.0
+
+### Added
+- MCP client：stdio transport 手写 JSON-RPC 2.0（initialize / tools/list / tools/call），无新增第三方依赖
+- config.json 新增 `mcpServers` 配置（command/args/env/enabled）；惰性连接、跨会话复用、退出时统一回收子进程
+- MCP 工具接入 Agent：`mcp__{server}__{tool}` 命名空间，`AgentToolExecutor` 统一分派（内置 / MCP / 插件三层工具来源）
+- 内置工具扩充：`fs_write`（fs.write/High 审批）、`shell_open`（shell.open/Medium 审批）、`clipboard_write`（clipboard.write/Low）
+- 设置页"MCP 服务器"区块：列表/添加/删除/启用开关，配置即信任的提示文案
+
+### Fixed
+- 修复设置页 `save_config` 调用参数名错误（`config` → `newConfig`）导致主题/快捷键等设置保存静默失败的问题
+- 修复路径类工具（fs_read / fs_write / shell_open）不展开 `~` 主目录简写导致写入失败的问题，展开提前到权限审批前，弹窗展示真实路径
 
 ## [Unreleased] 1.5.0
 

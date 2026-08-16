@@ -1,6 +1,7 @@
 //! 配置管理模块
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::AppHandle;
@@ -24,6 +25,30 @@ pub struct AppConfig {
     /// LLM 配置（含 API key，明文存于本地配置文件）
     #[serde(default)]
     pub llm: LlmConfig,
+    /// MCP stdio server 配置（server 名 -> 启动命令）
+    #[serde(default)]
+    pub mcp_servers: HashMap<String, McpServerConfig>,
+}
+
+/// MCP stdio server 启动配置
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpServerConfig {
+    /// 启动命令（如 npx、python、某个二进制路径）
+    pub command: String,
+    /// 命令参数
+    #[serde(default)]
+    pub args: Vec<String>,
+    /// 附加环境变量
+    #[serde(default)]
+    pub env: HashMap<String, String>,
+    /// 是否启用（缺省启用）
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// LLM 配置；base_url/model/api_key 为空字符串表示未配置
@@ -48,6 +73,7 @@ impl Default for AppConfig {
             language: "zh-CN".to_string(),
             show_guide: true,
             llm: LlmConfig::default(),
+            mcp_servers: HashMap::new(),
         }
     }
 }
@@ -179,5 +205,46 @@ mod tests {
         assert!(json.get("llm").is_some());
         assert_eq!(json["llm"]["baseUrl"], "");
         assert_eq!(json["llm"]["model"], "");
+    }
+
+    /// 旧版本 config.json 没有 mcpServers 字段，必须能向后兼容解析
+    #[test]
+    fn test_legacy_config_without_mcp_servers_parses() {
+        let legacy = r#"{
+            "shortcut": "Alt+R",
+            "theme": "system",
+            "hideOnBlur": true,
+            "language": "zh-CN",
+            "showGuide": true
+        }"#;
+        let config: AppConfig = serde_json::from_str(legacy).unwrap();
+        assert!(config.mcp_servers.is_empty());
+    }
+
+    #[test]
+    fn test_mcp_servers_camel_case() {
+        let mut config = AppConfig::default();
+        config.mcp_servers.insert(
+            "echo".to_string(),
+            McpServerConfig {
+                command: "npx".to_string(),
+                args: vec!["-y".to_string(), "echo-server".to_string()],
+                env: HashMap::from([("KEY".to_string(), "VALUE".to_string())]),
+                enabled: true,
+            },
+        );
+        let json = serde_json::to_value(&config).unwrap();
+        let server = &json["mcpServers"]["echo"];
+        assert_eq!(server["command"], "npx");
+        assert_eq!(server["args"], serde_json::json!(["-y", "echo-server"]));
+        assert_eq!(server["env"]["KEY"], "VALUE");
+        assert_eq!(server["enabled"], true);
+
+        // args/env/enabled 缺省时的解析
+        let minimal: McpServerConfig =
+            serde_json::from_str(r#"{"command": "echo-server"}"#).unwrap();
+        assert!(minimal.args.is_empty());
+        assert!(minimal.env.is_empty());
+        assert!(minimal.enabled);
     }
 }

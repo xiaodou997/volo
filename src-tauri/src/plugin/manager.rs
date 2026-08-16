@@ -183,6 +183,13 @@ impl PluginState {
             let path = entry.path();
             if path.is_dir() {
                 if let Ok(plugin) = load_plugin_from_dir(&path) {
+                    // `mcp` 是 MCP 工具命名空间（mcp__ 前缀）的保留 id，冲突时只告警不阻断
+                    if plugin.id == "mcp" {
+                        warn!(
+                            "Plugin id \"mcp\" is reserved for the MCP tool namespace; \
+                             its tools may shadow or be shadowed by MCP tools"
+                        );
+                    }
                     info!("Loaded plugin: {} ({})", plugin.name, plugin.id);
                     plugins.insert(plugin.id.clone(), plugin);
                 }

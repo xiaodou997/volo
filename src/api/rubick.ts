@@ -78,6 +78,14 @@ export interface LlmConfig {
   model: string;
 }
 
+// MCP 服务器配置（stdio 本地子进程，向内置 Agent 贡献 LLM 工具，工具名形如 mcp__{server}__{tool}）
+export interface McpServerConfig {
+  command: string;
+  args: string[];
+  env: Record<string, string>;
+  enabled: boolean;
+}
+
 // agent-event 事件 payload
 export interface AgentEvent {
   kind: 'message' | 'tool_call' | 'tool_result' | 'done' | 'error';

@@ -197,6 +197,61 @@
         </div>
       </section>
 
+      <!-- MCP 服务器 -->
+      <section class="settings-section">
+        <h3 class="section-title">MCP 服务器</h3>
+
+        <div class="mcp-hint">
+          MCP 服务器是本地启动的外部工具进程，配置即信任——请只添加你信任的 server。修改后下次问 AI 时生效。
+        </div>
+
+        <div v-if="mcpServerNames.length === 0" class="grants-empty">
+          暂无 MCP 服务器
+        </div>
+
+        <div v-for="name in mcpServerNames" :key="name" class="setting-item">
+          <div class="setting-label">
+            <span class="label-text">{{ name }}</span>
+            <span class="label-desc">{{ mcpSummary(mcpServers[name]) }}</span>
+          </div>
+          <div class="setting-control">
+            <label class="toggle">
+              <input
+                type="checkbox"
+                :checked="mcpServers[name].enabled"
+                @change="toggleMcpServer(name)"
+              />
+              <span class="toggle-slider"></span>
+            </label>
+            <button class="danger-btn" @click="removeMcpServer(name)">删除</button>
+          </div>
+        </div>
+
+        <!-- 添加表单 -->
+        <div class="mcp-add-form">
+          <input
+            type="text"
+            class="text-input"
+            v-model="mcpForm.name"
+            placeholder="名称（如 filesystem）"
+          />
+          <input
+            type="text"
+            class="text-input"
+            v-model="mcpForm.command"
+            placeholder="命令（如 npx）"
+          />
+          <input
+            type="text"
+            class="text-input mcp-args-input"
+            v-model="mcpForm.args"
+            placeholder="参数（空格分隔，可留空）"
+          />
+          <button class="action-btn" @click="addMcpServer">添加</button>
+        </div>
+        <div v-if="mcpFormError" class="mcp-form-error">{{ mcpFormError }}</div>
+      </section>
+
       <!-- 权限管理 -->
       <section class="settings-section">
         <h3 class="section-title">权限管理</h3>
@@ -270,13 +325,13 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue';
+import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 import { getVersion } from '@tauri-apps/api/app';
 import { check, type Update } from '@tauri-apps/plugin-updater';
 import { relaunch } from '@tauri-apps/plugin-process';
 import { useSearchStore } from '../stores/search';
-import type { LlmConfig, PermissionGrant, PermissionScope, RiskLevel } from '../api/rubick';
+import type { LlmConfig, McpServerConfig, PermissionGrant, PermissionScope, RiskLevel } from '../api/rubick';
 
 const emit = defineEmits<{
   (e: 'back'): void;
@@ -310,7 +365,7 @@ async function loadSettings() {
 // 保存设置
 async function saveSettings() {
   try {
-    await invoke('save_config', { config: settings.value });
+    await invoke('save_config', { newConfig: settings.value });
   } catch (e) {
     console.error('Failed to save settings:', e);
   }
@@ -471,6 +526,89 @@ async function saveApiKey() {
   }
 }
 
+// ============ MCP 服务器 ============
+
+const mcpServers = ref<Record<string, McpServerConfig>>({});
+const mcpForm = ref({ name: '', command: '', args: '' });
+const mcpFormError = ref('');
+
+const mcpServerNames = computed(() => Object.keys(mcpServers.value));
+
+// 加载 MCP 服务器列表
+async function loadMcpServers() {
+  try {
+    const config = await invoke<any>('get_config');
+    mcpServers.value = config?.mcpServers ?? {};
+  } catch (e) {
+    console.error('Failed to load MCP servers:', e);
+  }
+}
+
+// 命令 + 参数拼接摘要
+function mcpSummary(server: McpServerConfig): string {
+  return [server.command, ...(server.args ?? [])].join(' ');
+}
+
+// 重新读取完整 config，替换 mcpServers 后整体保存，其他字段原样保留
+async function saveMcpServers() {
+  try {
+    const config = await invoke<any>('get_config');
+    await invoke('save_config', {
+      newConfig: { ...config, mcpServers: mcpServers.value },
+    });
+  } catch (e) {
+    console.error('Failed to save MCP servers:', e);
+    alert(`MCP 服务器配置保存失败：${e}`);
+  }
+}
+
+// 添加 MCP 服务器
+function addMcpServer() {
+  const name = mcpForm.value.name.trim();
+  const command = mcpForm.value.command.trim();
+  const args = mcpForm.value.args.split(/\s+/).filter(Boolean);
+
+  if (!name) {
+    mcpFormError.value = '名称不能为空';
+    return;
+  }
+  if (mcpServers.value[name]) {
+    mcpFormError.value = `已存在同名服务器「${name}」`;
+    return;
+  }
+  if (!command) {
+    mcpFormError.value = '命令不能为空';
+    return;
+  }
+
+  mcpFormError.value = '';
+  mcpServers.value = {
+    ...mcpServers.value,
+    [name]: { command, args, env: {}, enabled: true },
+  };
+  mcpForm.value = { name: '', command: '', args: '' };
+  saveMcpServers();
+}
+
+// 切换启用状态
+function toggleMcpServer(name: string) {
+  const server = mcpServers.value[name];
+  if (!server) return;
+  mcpServers.value = {
+    ...mcpServers.value,
+    [name]: { ...server, enabled: !server.enabled },
+  };
+  saveMcpServers();
+}
+
+// 删除 MCP 服务器
+function removeMcpServer(name: string) {
+  const next = { ...mcpServers.value };
+  delete next[name];
+  mcpServers.value = next;
+  saveMcpServers();
+}
+
 // ============ 权限管理 ============
 
 // 已授权的插件权限
@@ -609,6 +747,7 @@ onMounted(() => {
   loadSettings();
   loadGrants();
   loadLlmConfig();
+  loadMcpServers();
   loadAppVersion();
   mediaQuery.addEventListener('change', handleSystemThemeChange);
 });
@@ -878,6 +1017,36 @@ input[type="range"]::-webkit-slider-thumb {
   font-size: 12px;
   color: #34c759;
   white-space: nowrap;
+}
+
+/* MCP 服务器 */
+.mcp-hint {
+  padding: 4px 0 8px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-tertiary);
+}
+
+.mcp-add-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 0;
+}
+
+.mcp-add-form .text-input {
+  width: 140px;
+}
+
+.mcp-add-form .mcp-args-input {
+  flex: 1;
+  min-width: 200px;
+}
+
+.mcp-form-error {
+  font-size: 12px;
+  color: var(--danger-color);
 }
 
 /* 权限管理 */
