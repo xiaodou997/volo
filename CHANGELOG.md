@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] 1.7.0
+
+### Added
+- Agent 多轮对话：会话历史存于内存，AgentView 完成后可基于上下文追问；启动器"问 AI"入口始终开启新会话，AgentView 顶栏提供"新对话"按钮
+- 会话历史回放：AgentView 顶栏"历史"入口列出过往会话（时间 + 首问预览），点击进入只读回放时间线
+- 新命令：`agent_new_session` / `agent_list_sessions` / `agent_read_session`（session_id 防目录穿越校验）
+- Agent 并发防护：会话进行中重复调用 agent_ask 直接报错
+
+### Changed
+- run_agent_loop 改为调用方持有 messages（完整对话历史跨轮延续）
+- 会话日志 model_response 的 content 改为完整记录（回放保真），tool_result 仍截断
+
 ## [Unreleased] 1.6.0
 
 ### Added

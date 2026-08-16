@@ -59,8 +59,11 @@ pub fn run() {
             // AI Agent
             ai::agent::agent_ask,
             ai::agent::agent_cancel,
+            ai::agent::agent_new_session,
             ai::plugin_tools::plugin_tool_result,
             ai::session::open_sessions_dir,
+            ai::session::agent_list_sessions,
+            ai::session::agent_read_session,
             // 快捷键
             core::shortcut::register_shortcut,
             core::shortcut::unregister_shortcut,

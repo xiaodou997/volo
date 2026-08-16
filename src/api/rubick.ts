@@ -97,6 +97,22 @@ export interface AgentEvent {
   result?: string;
 }
 
+// agent_list_sessions 返回的会话元信息（按时间倒序）
+export interface SessionMeta {
+  id: string;
+  startedAt: string;
+  preview: string;
+}
+
+// agent_read_session 返回的历史事件（回放用）
+export interface ReplayEvent {
+  kind: 'user' | 'message' | 'tool_call' | 'tool_result' | 'error';
+  content?: string;
+  name?: string;
+  args?: unknown;
+  result?: string;
+}
+
 // 文件信息（来自索引）
 export interface FileInfo {
   path: string;

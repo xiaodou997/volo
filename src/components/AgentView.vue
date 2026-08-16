@@ -7,31 +7,54 @@
   <div class="agent-view">
     <!-- 顶部导航 -->
     <div class="agent-header">
-      <button class="back-btn" @click="$emit('exit')">
+      <button class="back-btn" @click="onBack">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M19 12H5M12 19l-7-7 7-7"/>
         </svg>
       </button>
-      <h2 class="title">问 AI</h2>
-      <span v-if="!finished" class="running-dot"></span>
+      <h2 class="title">{{ headerTitle }}</h2>
+      <span v-if="viewMode === 'chat' && !finished" class="running-dot"></span>
+      <div class="header-actions">
+        <button v-if="viewMode === 'chat'" class="header-btn" @click="openHistory">历史</button>
+        <button class="header-btn" @click="newSession">新对话</button>
+      </div>
     </div>
 
-    <!-- 会话时间线 -->
-    <div class="agent-content" ref="contentRef">
-      <!-- 用户问题 -->
-      <div class="user-question">{{ query }}</div>
+    <!-- 会话历史列表 -->
+    <div v-if="viewMode === 'history'" class="agent-content">
+      <div v-if="sessionsLoading" class="loading-hint">加载中…</div>
+      <div v-else-if="sessionsError" class="session-error">{{ sessionsError }}</div>
+      <div v-else-if="sessions.length === 0" class="loading-hint">暂无历史会话</div>
+      <div
+        v-for="s in sessions"
+        :key="s.id"
+        class="session-item"
+        @click="openSession(s.id)"
+      >
+        <div class="session-time">{{ formatTime(s.startedAt) }}</div>
+        <div class="session-preview">{{ s.preview }}</div>
+      </div>
+    </div>
+
+    <!-- 会话时间线 / 历史回放 -->
+    <div v-else class="agent-content" ref="contentRef">
+      <!-- 用户问题（实时会话首轮） -->
+      <div v-if="viewMode === 'chat'" class="user-question">{{ query }}</div>
 
       <!-- 等待首个事件 -->
-      <div v-if="loading" class="loading-hint">思考中…</div>
+      <div v-if="viewMode === 'chat' && loading" class="loading-hint">思考中…</div>
 
       <!-- 事件时间线 -->
       <div
-        v-for="(item, index) in timeline"
+        v-for="(item, index) in displayTimeline"
         :key="index"
         class="timeline-item"
         :class="'timeline-' + item.kind"
       >
-        <template v-if="item.kind === 'tool_call'">
+        <template v-if="item.kind === 'user'">
+          <div class="user-question item-user">{{ item.text }}</div>
+        </template>
+        <template v-else-if="item.kind === 'tool_call'">
           <div class="item-title">🔧 调用 {{ item.text }}</div>
           <div v-if="item.detail" class="item-detail">{{ item.detail }}</div>
         </template>
@@ -44,8 +67,26 @@
         </template>
       </div>
 
-      <!-- 完成标记 -->
-      <div v-if="finished && !hasError" class="done-marker">✓ 已完成</div>
+      <!-- 完成 / 回放标记 -->
+      <div v-if="viewMode === 'replay'" class="done-marker">— 回放 —</div>
+      <div v-else-if="finished && !hasError" class="done-marker">✓ 已完成</div>
+    </div>
+
+    <!-- 追问输入栏（实时会话结束后才可用） -->
+    <div v-if="viewMode === 'chat' && finished" class="follow-up-bar">
+      <input
+        v-model="followUp"
+        type="text"
+        class="follow-up-input"
+        placeholder="继续追问…"
+        :disabled="!finished"
+        @keydown.enter="sendFollowUp"
+      />
+      <button
+        class="follow-up-send"
+        :disabled="!finished || !followUp.trim()"
+        @click="sendFollowUp"
+      >发送</button>
     </div>
   </div>
 </template>
@@ -56,7 +97,7 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
-import type { AgentEvent } from '../api/rubick';
+import type { AgentEvent, ReplayEvent, SessionMeta } from '../api/rubick';
 
 // LLM 输出按 Markdown 渲染；DOMPurify 消毒防注入（内容来自外部模型，不可信）
 marked.setOptions({ breaks: true });
@@ -75,19 +116,129 @@ const emit = defineEmits<{
 }>();
 
 interface TimelineItem {
-  kind: 'message' | 'tool_call' | 'tool_result' | 'error';
+  kind: 'user' | 'message' | 'tool_call' | 'tool_result' | 'error';
   text: string;
   detail?: string;
   // 流式输出进行中（末尾显示闪烁光标）
   streaming?: boolean;
 }
 
+// 视图模式：实时会话 / 历史列表 / 历史回放
+type ViewMode = 'chat' | 'history' | 'replay';
+
 const timeline = ref<TimelineItem[]>([]);
 const loading = ref(true);
 const finished = ref(false);
 const contentRef = ref<HTMLElement | null>(null);
 
+const viewMode = ref<ViewMode>('chat');
+// 回放时间线独立于实时 timeline，返回实时会话时原样恢复
+const replayTimeline = ref<TimelineItem[]>([]);
+const sessions = ref<SessionMeta[]>([]);
+const sessionsLoading = ref(false);
+const sessionsError = ref('');
+const followUp = ref('');
+
 const hasError = computed(() => timeline.value.some((item) => item.kind === 'error'));
+
+const displayTimeline = computed(() =>
+  viewMode.value === 'replay' ? replayTimeline.value : timeline.value
+);
+
+const headerTitle = computed(() => {
+  if (viewMode.value === 'history') return '历史会话';
+  if (viewMode.value === 'replay') return '会话回放';
+  return '问 AI';
+});
+
+function formatTime(iso: string): string {
+  const d = new Date(iso);
+  return isNaN(d.getTime()) ? iso : d.toLocaleString();
+}
+
+// 返回键：回放 → 历史列表 → 实时会话 → 退出
+function onBack() {
+  if (viewMode.value === 'replay') {
+    viewMode.value = 'history';
+  } else if (viewMode.value === 'history') {
+    viewMode.value = 'chat';
+  } else {
+    emit('exit');
+  }
+}
+
+async function openHistory() {
+  viewMode.value = 'history';
+  sessionsLoading.value = true;
+  sessionsError.value = '';
+  try {
+    sessions.value = await invoke<SessionMeta[]>('agent_list_sessions');
+  } catch (e) {
+    sessionsError.value = String(e);
+  } finally {
+    sessionsLoading.value = false;
+  }
+}
+
+function replayToTimeline(event: ReplayEvent): TimelineItem | null {
+  switch (event.kind) {
+    case 'user':
+      return { kind: 'user', text: event.content ?? '' };
+    case 'message':
+      return event.content ? { kind: 'message', text: event.content } : null;
+    case 'tool_call':
+      return {
+        kind: 'tool_call',
+        text: event.name ?? 'unknown',
+        detail: truncate(JSON.stringify(event.args ?? {}), 100),
+      };
+    case 'tool_result':
+      return { kind: 'tool_result', text: truncate(event.result ?? '', 200) };
+    case 'error':
+      return { kind: 'error', text: event.content ?? '未知错误' };
+  }
+}
+
+async function openSession(sessionId: string) {
+  sessionsError.value = '';
+  try {
+    const events = await invoke<ReplayEvent[]>('agent_read_session', { sessionId });
+    replayTimeline.value = events
+      .map(replayToTimeline)
+      .filter((item): item is TimelineItem => item !== null);
+    viewMode.value = 'replay';
+  } catch (e) {
+    sessionsError.value = String(e);
+  }
+}
+
+// 新对话：清空后端会话历史后退出，回到启动器搜索框
+async function newSession() {
+  try {
+    await invoke('agent_new_session');
+  } catch (e) {
+    console.warn('agent_new_session 失败', e);
+  }
+  emit('exit');
+}
+
+// 多轮追问：本地先压入 user 气泡，再发起新一轮 agent_ask
+async function sendFollowUp() {
+  const q = followUp.value.trim();
+  if (!q || !finished.value) return;
+  followUp.value = '';
+  timeline.value.push({ kind: 'user', text: q });
+  loading.value = true;
+  finished.value = false;
+  await scrollToBottom();
+  try {
+    await invoke('agent_ask', { query: q });
+  } catch (e) {
+    loading.value = false;
+    finished.value = true;
+    timeline.value.push({ kind: 'error', text: String(e) });
+  }
+}
 
 function truncate(s: string, max: number): string {
   return s.length > max ? s.slice(0, max) + '…' : s;
@@ -369,5 +520,112 @@ onUnmounted(() => {
   padding: 8px 0;
   font-size: 12px;
   color: var(--text-tertiary);
+}
+
+.header-actions {
+  display: flex;
+  gap: 4px;
+  margin-left: 8px;
+}
+
+.header-btn {
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 13px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.2s, color 0.2s;
+}
+
+.header-btn:hover {
+  background: var(--hover-bg);
+  color: var(--text-primary);
+}
+
+/* 追问/回放中的用户气泡在时间线内，去掉分隔线与额外内边距 */
+.timeline-user {
+  border-bottom: none;
+  padding: 0;
+}
+
+.item-user {
+  margin-bottom: 0;
+}
+
+.session-item {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border-color);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.session-item:hover {
+  background: var(--hover-bg);
+}
+
+.session-time {
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+.session-preview {
+  font-size: 14px;
+  color: var(--text-primary);
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-error {
+  font-size: 13px;
+  color: var(--danger-color);
+  padding: 8px 0;
+}
+
+.follow-up-bar {
+  display: flex;
+  gap: 8px;
+  padding: 10px 16px;
+  border-top: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+}
+
+.follow-up-input {
+  flex: 1;
+  border: none;
+  outline: none;
+  font-size: 14px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+}
+
+.follow-up-input::placeholder {
+  color: var(--text-tertiary);
+}
+
+.follow-up-input:disabled {
+  opacity: 0.6;
+}
+
+.follow-up-send {
+  border: none;
+  border-radius: 6px;
+  padding: 0 14px;
+  font-size: 13px;
+  background: var(--accent-color);
+  color: #fff;
+  cursor: pointer;
+  transition: opacity 0.2s;
+}
+
+.follow-up-send:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 </style>

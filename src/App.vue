@@ -150,8 +150,13 @@ function handleClear() {
     }
   }
 
-// 进入 Agent 模式
-function enterAgent(query: string) {
+// 进入 Agent 模式（启动器入口永远是新会话；清空失败也继续）
+async function enterAgent(query: string) {
+  try {
+    await invoke('agent_new_session');
+  } catch (e) {
+    console.warn('agent_new_session 失败，继续进入 Agent 模式', e);
+  }
   agentQuery.value = query;
   agentMode.value = true;
   updateWindowSize();

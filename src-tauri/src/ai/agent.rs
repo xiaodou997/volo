@@ -5,7 +5,7 @@
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -111,16 +111,20 @@ pub trait ToolExecutor: Send + Sync {
 
 /// Agent 会话循环（纯异步函数，emit 以闭包注入）
 ///
+/// - messages 为调用方维护的对话历史（已压入 system + user），
+///   循环内 assistant / tool_result 消息直接 push 进去，
+///   函数返回时 messages 即完整对话历史，可供下一轮追问复用
 /// - 模型回复走 chat_stream：content 增量实时 emit `message`（delta: true），
 ///   一轮结束后不再重复 emit 该轮完整 message（前端把 delta 拼成完整气泡）
 /// - log 为可选的会话日志回调（kind + payload），关键节点：
-///   user_input / model_response / tool_call / tool_result / error / done
+///   model_response / tool_call / tool_result / error / done
+///   （user_input 由调用方在压入 user 消息时记录）
 /// - tools 为本次会话可见的工具规格（内置 + 插件贡献），每轮原样传给模型
 /// - 所有退出路径最后都会 emit `done`；致命错误在此之前 emit `error`
 pub async fn run_agent_loop(
     backend: &dyn ChatBackend,
     executor: &dyn ToolExecutor,
-    query: &str,
+    messages: &mut Vec<Message>,
     tools: &[ToolSpec],
     mut emit: impl FnMut(AgentEvent) + Send,
     cancel: &AtomicBool,
@@ -132,10 +136,6 @@ pub async fn run_agent_loop(
         }
     };
 
-    log_event("user_input", json!({ "query": query }));
-
-    let mut messages = vec![Message::system(SYSTEM_PROMPT), Message::user(query)];
-
     for _round in 0..MAX_ROUNDS {
         if cancel.load(Ordering::Relaxed) {
             log_event("done", json!({ "reason": "cancelled" }));
@@ -146,7 +146,7 @@ pub async fn run_agent_loop(
         // 流式请求：content 增量实时 emit，本轮是否有增量决定结尾是否补发完整消息
         let mut streamed = false;
         let response = match backend
-            .chat_stream(&messages, tools, &mut |delta| {
+            .chat_stream(messages, tools, &mut |delta| {
                 streamed = true;
                 emit(AgentEvent::delta_message(delta));
             })
@@ -165,7 +165,7 @@ pub async fn run_agent_loop(
         log_event(
             "model_response",
             json!({
-                "content": response.content.as_deref().map(truncate_summary),
+                "content": response.content,
                 "tool_calls": response.tool_calls.iter().map(|c| c.name.clone()).collect::<Vec<_>>(),
             }),
         );
@@ -173,6 +173,10 @@ pub async fn run_agent_loop(
         if response.tool_calls.is_empty() {
             // 非流式回退路径（未收到任何增量）才补发完整消息，避免与 delta 重复
             let answer = response.content.unwrap_or_default();
+            // 最终回复也入历史，保证返回时 messages 是完整对话
+            if !answer.is_empty() {
+                messages.push(Message::assistant(Some(answer.clone()), vec![]));
+            }
             if !streamed && !answer.is_empty() {
                 emit(AgentEvent::message(answer));
             }
@@ -247,17 +251,54 @@ fn value_to_text(value: &Value) -> String {
 /// Agent 会话管理器（Tauri managed state）
 pub struct AgentManager {
     cancel: Arc<AtomicBool>,
+    /// 多轮对话历史（含首条 system），每轮 agent_ask 结束后回写
+    history: Mutex<Vec<Message>>,
+    /// 会话进行中标记：防止并发 agent_ask 打乱共享历史
+    busy: AtomicBool,
 }
 
 impl AgentManager {
     pub fn new() -> Self {
         Self {
             cancel: Arc::new(AtomicBool::new(false)),
+            history: Mutex::new(Vec::new()),
+            busy: AtomicBool::new(false),
         }
     }
 
     pub fn cancel_flag(&self) -> Arc<AtomicBool> {
         self.cancel.clone()
+    }
+
+    pub fn is_busy(&self) -> bool {
+        self.busy.load(Ordering::SeqCst)
+    }
+
+    /// 开启新会话：清空历史并复位取消标志
+    pub fn new_session(&self) {
+        self.history.lock().unwrap().clear();
+        self.cancel.store(false, Ordering::Relaxed);
+    }
+
+    /// 尝试开始一轮对话：busy 则报错；否则置 busy、复位取消标志，
+    /// 压入 system（首轮）+ user 消息后返回本地历史副本（此后不再持锁）
+    pub fn begin_turn(&self, query: &str) -> Result<Vec<Message>> {
+        if self.busy.swap(true, Ordering::SeqCst) {
+            return Err(VoloError::Other("上一个会话还在进行中".to_string()));
+        }
+        self.cancel.store(false, Ordering::Relaxed);
+        let mut history = self.history.lock().unwrap();
+        if history.is_empty() {
+            history.push(Message::system(SYSTEM_PROMPT));
+        }
+        history.push(Message::user(query));
+        Ok(history.clone())
+    }
+
+    /// 一轮对话结束（正常/取消/出错）：回写历史并解除 busy
+    pub fn finish_turn(&self, messages: Vec<Message>) {
+        *self.history.lock().unwrap() = messages;
+        self.busy.store(false, Ordering::SeqCst);
     }
 }
 
@@ -288,8 +329,6 @@ pub fn agent_ask(
 
     let backend = OpenAiBackend::new(llm.base_url, llm.model, api_key);
     let cancel = manager.cancel_flag();
-    // 新会话开始前复位取消标志
-    cancel.store(false, Ordering::Relaxed);
 
     // 会话日志：顺手清理 30 天前的旧日志；日志创建失败不阻断会话
     let sessions_dir = sessions_dir(&app)?;
@@ -304,7 +343,14 @@ pub fn agent_ask(
         }
     };
 
+    // busy 防护 + 压入 system（首轮）/user 消息，拿到本地历史副本（此后不再持锁）
+    let mut messages = manager.begin_turn(&query)?;
+    if let Some(log) = session_log.as_mut() {
+        let _ = log.log("user_input", &json!({ "query": query }));
+    }
+
     let app_handle = app.clone();
+    let finish_handle = app.clone();
     let mcp_servers = config.get().mcp_servers;
     tauri::async_runtime::spawn(async move {
         let engine = app_handle.state::<PermissionEngine>();
@@ -331,13 +377,21 @@ pub fn agent_ask(
             let mut log_cb = |kind: &str, payload: &Value| {
                 let _ = log.log(kind, payload);
             };
-            run_agent_loop(&backend, &executor, &query, &tools, emit, &cancel, Some(&mut log_cb)).await;
+            run_agent_loop(&backend, &executor, &mut messages, &tools, emit, &cancel, Some(&mut log_cb)).await;
         } else {
-            run_agent_loop(&backend, &executor, &query, &tools, emit, &cancel, None).await;
+            run_agent_loop(&backend, &executor, &mut messages, &tools, emit, &cancel, None).await;
         }
+        // 任务结束（正常/取消/出错所有路径都会走到这里）：回写历史并解除 busy
+        finish_handle.state::<AgentManager>().finish_turn(messages);
     });
 
     Ok(())
+}
+
+/// 开启新会话：清空多轮历史并复位取消标志
+#[tauri::command]
+pub fn agent_new_session(manager: State<'_, AgentManager>) {
+    manager.new_session();
 }
 
 /// 取消当前 Agent 会话（下一轮循环前生效）
@@ -445,6 +499,11 @@ mod tests {
         events.iter().map(|e| e.kind).collect()
     }
 
+    /// 调用方职责：压入 system + user 作为初始历史
+    fn start_messages(query: &str) -> Vec<Message> {
+        vec![Message::system(SYSTEM_PROMPT), Message::user(query)]
+    }
+
     /// 完整回路：第一轮 tool_call → 执行回填 → 第二轮最终回答
     #[tokio::test]
     async fn test_loop_tool_call_then_answer() {
@@ -456,7 +515,8 @@ mod tests {
         let cancel = AtomicBool::new(false);
 
         let mut events = Vec::new();
-        run_agent_loop(&backend, &executor, "剪贴板里有什么", &ToolRegistry::specs(), |e| events.push(e), &cancel, None).await;
+        let mut messages = start_messages("剪贴板里有什么");
+        run_agent_loop(&backend, &executor, &mut messages, &ToolRegistry::specs(), |e| events.push(e), &cancel, None).await;
 
         assert_eq!(
             kinds(&events),
@@ -486,6 +546,11 @@ mod tests {
         let calls = executor.calls.lock().unwrap();
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].0, "clipboard_read");
+
+        // 返回时 messages 即完整历史：system/user/assistant(tool_call)/tool/assistant(final)
+        assert_eq!(messages.len(), 5);
+        assert_eq!(messages[4].role, "assistant");
+        assert_eq!(messages[4].content.as_deref(), Some("剪贴板里是：你好"));
     }
 
     /// 权限被拒：错误文本作为 tool 结果回填，会话继续
@@ -499,7 +564,8 @@ mod tests {
         let cancel = AtomicBool::new(false);
 
         let mut events = Vec::new();
-        run_agent_loop(&backend, &executor, "读一下密码文件", &ToolRegistry::specs(), |e| events.push(e), &cancel, None).await;
+        let mut messages = start_messages("读一下密码文件");
+        run_agent_loop(&backend, &executor, &mut messages, &ToolRegistry::specs(), |e| events.push(e), &cancel, None).await;
 
         assert_eq!(
             kinds(&events),
@@ -533,7 +599,8 @@ mod tests {
         let cancel = AtomicBool::new(false);
 
         let mut events = Vec::new();
-        run_agent_loop(&backend, &executor, "循环", &ToolRegistry::specs(), |e| events.push(e), &cancel, None).await;
+        let mut messages = start_messages("循环");
+        run_agent_loop(&backend, &executor, &mut messages, &ToolRegistry::specs(), |e| events.push(e), &cancel, None).await;
 
         // 每个 mock 响应恰用一轮，8 轮后强制结束
         assert_eq!(backend.seen.lock().unwrap().len(), MAX_ROUNDS);
@@ -557,7 +624,8 @@ mod tests {
         let cancel = AtomicBool::new(true);
 
         let mut events = Vec::new();
-        run_agent_loop(&backend, &executor, "q", &ToolRegistry::specs(), |e| events.push(e), &cancel, None).await;
+        let mut messages = start_messages("q");
+        run_agent_loop(&backend, &executor, &mut messages, &ToolRegistry::specs(), |e| events.push(e), &cancel, None).await;
 
         assert_eq!(kinds(&events), vec![AgentEventKind::Done]);
         assert!(backend.seen.lock().unwrap().is_empty());
@@ -571,7 +639,8 @@ mod tests {
         let cancel = AtomicBool::new(false);
 
         let mut events = Vec::new();
-        run_agent_loop(&backend, &executor, "q", &ToolRegistry::specs(), |e| events.push(e), &cancel, None).await;
+        let mut messages = start_messages("q");
+        run_agent_loop(&backend, &executor, &mut messages, &ToolRegistry::specs(), |e| events.push(e), &cancel, None).await;
 
         assert_eq!(
             kinds(&events),
@@ -623,6 +692,7 @@ mod tests {
         let cancel = AtomicBool::new(false);
 
         let mut events = Vec::new();
+        let mut messages = start_messages("打个招呼");
         let mut log_entries: Vec<(String, Value)> = Vec::new();
         {
             let mut log_cb = |kind: &str, payload: &Value| {
@@ -631,7 +701,7 @@ mod tests {
             run_agent_loop(
                 &backend,
                 &executor,
-                "打个招呼",
+                &mut messages,
                 &ToolRegistry::specs(),
                 |e| events.push(e),
                 &cancel,
@@ -655,13 +725,12 @@ mod tests {
             assert_eq!(events[i].delta, Some(true));
         }
 
-        // 日志覆盖 user_input / model_response / done
+        // 日志覆盖 model_response / done（user_input 改由调用方记录，循环内不再记）
         let log_kinds: Vec<&str> = log_entries.iter().map(|(k, _)| k.as_str()).collect();
-        assert_eq!(log_kinds, vec!["user_input", "model_response", "done"]);
-        assert_eq!(log_entries[0].1["query"], "打个招呼");
-        assert_eq!(log_entries[1].1["content"], "你好！");
-        assert_eq!(log_entries[1].1["tool_calls"], json!([]));
-        assert_eq!(log_entries[2].1["reason"], "completed");
+        assert_eq!(log_kinds, vec!["model_response", "done"]);
+        assert_eq!(log_entries[0].1["content"], "你好！");
+        assert_eq!(log_entries[0].1["tool_calls"], json!([]));
+        assert_eq!(log_entries[1].1["reason"], "completed");
     }
 
     /// 带工具调用的流式会话：tool_call/tool_result 也落日志，结果摘要截断
@@ -676,6 +745,7 @@ mod tests {
         let cancel = AtomicBool::new(false);
 
         let mut events = Vec::new();
+        let mut messages = start_messages("q");
         let mut log_entries: Vec<(String, Value)> = Vec::new();
         {
             let mut log_cb = |kind: &str, payload: &Value| {
@@ -684,7 +754,7 @@ mod tests {
             run_agent_loop(
                 &backend,
                 &executor,
-                "q",
+                &mut messages,
                 &ToolRegistry::specs(),
                 |e| events.push(e),
                 &cancel,
@@ -697,7 +767,6 @@ mod tests {
         assert_eq!(
             log_kinds,
             vec![
-                "user_input",
                 "model_response",
                 "tool_call",
                 "tool_result",
@@ -706,17 +775,123 @@ mod tests {
             ]
         );
 
-        let tool_call_log = &log_entries[2].1;
+        let tool_call_log = &log_entries[1].1;
         assert_eq!(tool_call_log["name"], "clipboard_read");
 
         // 结果摘要截断到 500 字符 + 省略号
-        let result_log = log_entries[3].1["result"].as_str().unwrap();
+        let result_log = log_entries[2].1["result"].as_str().unwrap();
         assert!(result_log.ends_with('…'));
         assert_eq!(result_log.chars().count(), 501);
-        assert_eq!(log_entries[3].1["name"], "clipboard_read");
+        assert_eq!(log_entries[2].1["name"], "clipboard_read");
 
         // 完整结果不受影响地回填给 LLM
         let seen = backend.seen.lock().unwrap();
         assert_eq!(seen[1][3].content.as_deref(), Some(long_result.as_str()));
+    }
+
+    /// 历史延续：共享 messages 跑两轮，第二轮请求携带首轮 user/assistant/tool 内容
+    #[tokio::test]
+    async fn test_history_carries_across_turns() {
+        let backend = MockBackend::new(vec![
+            tool_call("call_1", "clipboard_read", json!({})),
+            final_answer("剪贴板里是：你好"),
+            final_answer("第二轮回答"),
+        ]);
+        let executor = MockExecutor::ok(json!("你好"));
+        let cancel = AtomicBool::new(false);
+
+        let mut events = Vec::new();
+        let mut messages = start_messages("剪贴板里有什么");
+        run_agent_loop(&backend, &executor, &mut messages, &ToolRegistry::specs(), |e| events.push(e), &cancel, None).await;
+        // 第一轮后历史：system/user/assistant(tool_call)/tool/assistant(final)
+        assert_eq!(messages.len(), 5);
+
+        // 模拟下一轮追问：调用方压入新 user 消息后再跑
+        messages.push(Message::user("再说一遍"));
+        run_agent_loop(&backend, &executor, &mut messages, &ToolRegistry::specs(), |e| events.push(e), &cancel, None).await;
+
+        // 第二轮 backend 收到的 messages 含首轮完整内容 + 新追问
+        let seen = backend.seen.lock().unwrap();
+        assert_eq!(seen.len(), 3);
+        let second_turn = &seen[2];
+        assert_eq!(second_turn.len(), 6);
+        assert_eq!(second_turn[0].role, "system");
+        assert_eq!(second_turn[1].content.as_deref(), Some("剪贴板里有什么"));
+        assert_eq!(second_turn[2].role, "assistant");
+        assert_eq!(second_turn[3].role, "tool");
+        assert_eq!(second_turn[3].content.as_deref(), Some("你好"));
+        assert_eq!(second_turn[4].content.as_deref(), Some("剪贴板里是：你好"));
+        assert_eq!(second_turn[5].content.as_deref(), Some("再说一遍"));
+    }
+
+    /// model_response 日志完整记录 content（不截断），tool_result 仍截断
+    #[tokio::test]
+    async fn test_loop_logs_full_model_response() {
+        let long_answer = "答".repeat(600);
+        let backend = MockBackend::new(vec![final_answer(&long_answer)]);
+        let executor = MockExecutor::ok(json!("x"));
+        let cancel = AtomicBool::new(false);
+
+        let mut events = Vec::new();
+        let mut messages = start_messages("q");
+        let mut log_entries: Vec<(String, Value)> = Vec::new();
+        {
+            let mut log_cb = |kind: &str, payload: &Value| {
+                log_entries.push((kind.to_string(), payload.clone()));
+            };
+            run_agent_loop(
+                &backend,
+                &executor,
+                &mut messages,
+                &ToolRegistry::specs(),
+                |e| events.push(e),
+                &cancel,
+                Some(&mut log_cb),
+            )
+            .await;
+        }
+
+        assert_eq!(log_entries[0].0, "model_response");
+        assert_eq!(log_entries[0].1["content"].as_str(), Some(long_answer.as_str()));
+    }
+
+    /// busy 防护：会话进行中拒绝并发 begin_turn；finish_turn 后可再次开始
+    #[test]
+    fn test_begin_turn_busy_guard() {
+        let manager = AgentManager::new();
+        let messages = manager.begin_turn("第一个问题").unwrap();
+        assert!(manager.is_busy());
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].role, "system");
+        assert_eq!(messages[1].role, "user");
+
+        // 进行中再次 begin_turn 被拒
+        let err = manager.begin_turn("并发问题").unwrap_err();
+        assert!(err.to_string().contains("还在进行中"));
+
+        // 结束后回写历史，下一轮在同一历史上继续
+        manager.finish_turn(messages);
+        assert!(!manager.is_busy());
+        let messages = manager.begin_turn("追问").unwrap();
+        assert_eq!(messages.len(), 3);
+        assert_eq!(messages[2].content.as_deref(), Some("追问"));
+    }
+
+    /// new_session 清空历史并复位取消标志
+    #[test]
+    fn test_new_session_clears_history() {
+        let manager = AgentManager::new();
+        let messages = manager.begin_turn("旧会话").unwrap();
+        manager.finish_turn(messages);
+        manager.cancel_flag().store(true, Ordering::Relaxed);
+
+        manager.new_session();
+        assert!(!manager.cancel_flag().load(Ordering::Relaxed));
+
+        // 历史已清空：下一轮重新压入 system + user
+        let messages = manager.begin_turn("新会话").unwrap();
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].role, "system");
+        manager.finish_turn(messages);
     }
 }
