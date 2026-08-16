@@ -66,15 +66,20 @@ pnpm tauri build
 
 ## GitHub Actions 自动发布
 
-1. 推送标签触发自动构建:
+1. 对齐版本号：确认 `src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml`、`package.json` 三处版本号一致，并在 `CHANGELOG.md` 定版
+2. 推送标签触发自动构建:
    ```bash
-   git tag v1.0.0
-   git push origin v1.0.0
+   git tag v1.4.0
+   git push origin v1.4.0
    ```
+3. GitHub Actions 将自动构建三平台产物并创建 **draft** Release（带 updater 签名与 latest.json）
+4. 在 GitHub Releases 页面检查产物、编辑发布说明后手动发布
 
-2. GitHub Actions 将自动构建并创建 Release
+## 自动更新（updater）
 
-3. 在 GitHub Releases 页面查看和编辑发布说明
+- 更新元信息：每个 Release 需包含 `latest.json`（tauri-action 检测到签名私钥 secret 后自动生成上传）
+- 签名密钥：`TAURI_SIGNING_PRIVATE_KEY` 存于 GitHub 仓库 secrets；私钥本地备份于 `~/.tauri/volo-updater.key`（**勿入库、勿丢失**，丢失后旧版本将无法验证新更新包）
+- 客户端行为：启动时静默检查（有更新发系统通知），设置页"关于与更新"可手动检查并一键更新重启
 
 ## 签名配置
 

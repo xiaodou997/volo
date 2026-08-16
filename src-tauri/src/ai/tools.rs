@@ -17,10 +17,13 @@ pub const AGENT_PRINCIPAL: &str = "agent:builtin";
 const FS_READ_MAX_BYTES: usize = 4096;
 
 /// 工具描述（parameters 为 JSON Schema）
+///
+/// name/description 用 String：内置工具是静态字符串，
+/// 插件工具在运行时由 manifest 动态生成（见 ai::plugin_tools）
 #[derive(Debug, Clone, Serialize)]
 pub struct ToolSpec {
-    pub name: &'static str,
-    pub description: &'static str,
+    pub name: String,
+    pub description: String,
     pub parameters: Value,
 }
 
@@ -32,16 +35,16 @@ impl ToolRegistry {
     pub fn specs() -> Vec<ToolSpec> {
         vec![
             ToolSpec {
-                name: "clipboard_read",
-                description: "读取系统剪贴板的文本内容",
+                name: "clipboard_read".to_string(),
+                description: "读取系统剪贴板的文本内容".to_string(),
                 parameters: json!({
                     "type": "object",
                     "properties": {},
                 }),
             },
             ToolSpec {
-                name: "fs_read",
-                description: "读取本地文本文件的内容（超长会截断）",
+                name: "fs_read".to_string(),
+                description: "读取本地文本文件的内容（超长会截断）".to_string(),
                 parameters: json!({
                     "type": "object",
                     "properties": {
@@ -54,8 +57,8 @@ impl ToolRegistry {
                 }),
             },
             ToolSpec {
-                name: "notification_show",
-                description: "发送一条系统通知",
+                name: "notification_show".to_string(),
+                description: "发送一条系统通知".to_string(),
                 parameters: json!({
                     "type": "object",
                     "properties": {
@@ -193,7 +196,7 @@ mod tests {
             assert_eq!(spec.parameters["type"], "object");
             assert!(spec.parameters.get("properties").is_some());
             // 每个工具都映射到已注册的 capability
-            assert!(ToolRegistry::capability_of(spec.name).is_some());
+            assert!(ToolRegistry::capability_of(&spec.name).is_some());
         }
 
         assert_eq!(

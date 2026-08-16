@@ -219,15 +219,50 @@
         </div>
       </section>
 
-      <!-- 关于 -->
+      <!-- 关于与更新 -->
       <section class="settings-section">
-        <h3 class="section-title">关于</h3>
+        <h3 class="section-title">关于与更新</h3>
 
         <div class="about-info">
           <div class="app-logo">V</div>
           <div class="app-name">Volo</div>
-          <div class="app-version">版本 0.1.0</div>
+          <div class="app-version">版本 {{ appVersion }}</div>
           <div class="app-desc">桌面效率工具箱</div>
+        </div>
+
+        <div class="setting-item">
+          <div class="setting-label">
+            <span class="label-text">检查更新</span>
+            <span class="label-desc">{{ updateStatus }}</span>
+          </div>
+          <div class="setting-control">
+            <button
+              v-if="updateAvailable"
+              class="action-btn"
+              :disabled="updating"
+              @click="installUpdate"
+            >
+              {{ updating ? updateProgress : '立即更新' }}
+            </button>
+            <button
+              v-else
+              class="action-btn"
+              :disabled="checkingUpdate"
+              @click="checkUpdate"
+            >
+              {{ checkingUpdate ? '检查中…' : '检查更新' }}
+            </button>
+          </div>
+        </div>
+
+        <div class="setting-item">
+          <div class="setting-label">
+            <span class="label-text">会话日志</span>
+            <span class="label-desc">打开 AI 会话事件日志目录</span>
+          </div>
+          <div class="setting-control">
+            <button class="action-btn" @click="openSessionsDir">打开</button>
+          </div>
         </div>
       </section>
     </div>
@@ -237,6 +272,9 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
+import { getVersion } from '@tauri-apps/api/app';
+import { check, type Update } from '@tauri-apps/plugin-updater';
+import { relaunch } from '@tauri-apps/plugin-process';
 import { useSearchStore } from '../stores/search';
 import type { LlmConfig, PermissionGrant, PermissionScope, RiskLevel } from '../api/rubick';
 
@@ -481,6 +519,84 @@ async function revokeGrant(grant: PermissionGrant) {
   }
 }
 
+// ============ 关于与更新 ============
+
+const appVersion = ref('');
+const checkingUpdate = ref(false);
+const updating = ref(false);
+const updateStatus = ref('检查是否有新版本');
+const updateProgress = ref('');
+const pendingUpdate = ref<Update | null>(null);
+const updateAvailable = ref(false);
+
+// 加载当前版本号
+async function loadAppVersion() {
+  try {
+    appVersion.value = await getVersion();
+  } catch (e) {
+    console.error('Failed to get app version:', e);
+  }
+}
+
+// 手动检查更新
+async function checkUpdate() {
+  checkingUpdate.value = true;
+  updateStatus.value = '正在检查更新…';
+  try {
+    const update = await check();
+    if (update) {
+      pendingUpdate.value = update;
+      updateAvailable.value = true;
+      updateStatus.value = `发现新版本 ${update.version}（当前 ${update.currentVersion}）`;
+    } else {
+      updateAvailable.value = false;
+      updateStatus.value = '已是最新';
+    }
+  } catch (e) {
+    updateStatus.value = `检查更新失败：${e}`;
+  } finally {
+    checkingUpdate.value = false;
+  }
+}
+
+// 下载并安装更新，完成后重启
+async function installUpdate() {
+  const update = pendingUpdate.value;
+  if (!update || updating.value) return;
+  updating.value = true;
+  try {
+    let downloaded = 0;
+    let total = 0;
+    await update.downloadAndInstall((event) => {
+      if (event.event === 'Started') {
+        total = event.data.contentLength ?? 0;
+        updateProgress.value = '下载中…';
+      } else if (event.event === 'Progress') {
+        downloaded += event.data.chunkLength;
+        updateProgress.value = total > 0
+          ? `下载中 ${Math.round((downloaded / total) * 100)}%`
+          : '下载中…';
+      } else if (event.event === 'Finished') {
+        updateProgress.value = '安装中…';
+      }
+    });
+    await relaunch();
+  } catch (e) {
+    updateStatus.value = `更新失败：${e}`;
+    updating.value = false;
+  }
+}
+
+// 打开 AI 会话日志目录
+async function openSessionsDir() {
+  try {
+    await invoke('open_sessions_dir');
+  } catch (e) {
+    console.error('Failed to open sessions dir:', e);
+    alert(`打开会话日志目录失败：${e}`);
+  }
+}
+
 // 监听系统主题变化
 const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
 function handleSystemThemeChange() {
@@ -493,6 +609,7 @@ onMounted(() => {
   loadSettings();
   loadGrants();
   loadLlmConfig();
+  loadAppVersion();
   mediaQuery.addEventListener('change', handleSystemThemeChange);
 });
 

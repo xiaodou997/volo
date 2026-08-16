@@ -125,6 +125,154 @@ pub trait ChatBackend: Send + Sync {
         messages: &'a [Message],
         tools: &'a [ToolSpec],
     ) -> Pin<Box<dyn Future<Output = Result<ChatResponse>> + Send + 'a>>;
+
+    /// 流式聊天：content 增量通过 on_delta 实时回调，返回完整 ChatResponse。
+    /// 默认实现回退为非流式：chat() 完成后一次性回调全部 content。
+    fn chat_stream<'a>(
+        &'a self,
+        messages: &'a [Message],
+        tools: &'a [ToolSpec],
+        on_delta: &'a mut (dyn FnMut(String) + Send),
+    ) -> Pin<Box<dyn Future<Output = Result<ChatResponse>> + Send + 'a>> {
+        Box::pin(async move {
+            let resp = self.chat(messages, tools).await?;
+            if let Some(content) = &resp.content {
+                if !content.is_empty() {
+                    on_delta(content.clone());
+                }
+            }
+            Ok(resp)
+        })
+    }
+}
+
+/// SSE 流解析器：跨 chunk 维护行缓冲与 tool_calls 分片累积状态。
+///
+/// 逐次 feed() 字节流文本（允许在行中间切断），返回每段产出的 content deltas；
+/// 流结束后 finish() 产出完整 ChatResponse。
+#[derive(Default)]
+pub struct SseAccumulator {
+    /// 未遇到换行符的半行缓冲
+    line_buf: String,
+    /// 累积的完整 content
+    content: String,
+    /// 按 index 累积的 tool_calls 分片
+    tool_calls: Vec<PartialToolCall>,
+    /// 收到 `data: [DONE]`
+    done: bool,
+}
+
+#[derive(Default)]
+struct PartialToolCall {
+    id: String,
+    name: String,
+    arguments: String,
+}
+
+impl SseAccumulator {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// 喂入一段文本，返回本次解析出的 content deltas（保持到达顺序）
+    pub fn feed(&mut self, text: &str) -> Vec<String> {
+        self.line_buf.push_str(text);
+        let mut deltas = Vec::new();
+        while let Some(pos) = self.line_buf.find('\n') {
+            let line: String = self.line_buf.drain(..=pos).collect();
+            self.handle_line(line.trim_end_matches(['\n', '\r']), &mut deltas);
+        }
+        deltas
+    }
+
+    /// 流结束：处理尾部半行，产出完整 ChatResponse
+    pub fn finish(mut self) -> Result<ChatResponse> {
+        if !self.line_buf.trim().is_empty() {
+            let mut deltas = Vec::new();
+            let line = std::mem::take(&mut self.line_buf);
+            self.handle_line(line.trim_end_matches('\r'), &mut deltas);
+            self.content.push_str(&deltas.concat());
+        }
+
+        let tool_calls = self
+            .tool_calls
+            .into_iter()
+            .map(|call| ToolCall {
+                id: call.id,
+                name: call.name,
+                arguments: serde_json::from_str(&call.arguments).unwrap_or(Value::Null),
+            })
+            .collect();
+
+        let content = if self.content.is_empty() {
+            None
+        } else {
+            Some(self.content)
+        };
+
+        Ok(ChatResponse {
+            content,
+            tool_calls,
+        })
+    }
+
+    fn handle_line(&mut self, line: &str, deltas: &mut Vec<String>) {
+        // 已收到 [DONE]，后续行忽略
+        if self.done {
+            return;
+        }
+        // 空行、注释行（`: ` 前缀）跳过
+        let payload = match line.strip_prefix("data:") {
+            Some(p) => p.trim_start(),
+            None => return,
+        };
+        if payload == "[DONE]" {
+            self.done = true;
+            return;
+        }
+
+        let Ok(chunk) = serde_json::from_str::<Value>(payload) else {
+            return; // 无法解析的行静默跳过（心跳等）
+        };
+        let Some(delta) = chunk
+            .get("choices")
+            .and_then(|c| c.get(0))
+            .and_then(|c| c.get("delta"))
+        else {
+            return;
+        };
+
+        if let Some(content) = delta.get("content").and_then(Value::as_str) {
+            if !content.is_empty() {
+                self.content.push_str(content);
+                deltas.push(content.to_string());
+            }
+        }
+
+        if let Some(calls) = delta.get("tool_calls").and_then(Value::as_array) {
+            for call in calls {
+                let index = call
+                    .get("index")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0) as usize;
+                while self.tool_calls.len() <= index {
+                    self.tool_calls.push(PartialToolCall::default());
+                }
+                let slot = &mut self.tool_calls[index];
+                if let Some(id) = call.get("id").and_then(Value::as_str) {
+                    slot.id.push_str(id);
+                }
+                if let Some(function) = call.get("function") {
+                    if let Some(name) = function.get("name").and_then(Value::as_str) {
+                        slot.name.push_str(name);
+                    }
+                    if let Some(args) = function.get("arguments").and_then(Value::as_str) {
+                        slot.arguments.push_str(args);
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// OpenAI 兼容后端
@@ -150,6 +298,60 @@ impl OpenAiBackend {
             api_key,
         }
     }
+
+    fn request_body(&self, messages: &[Message], tools: &[ToolSpec], stream: bool) -> Value {
+        let mut body = json!({
+            "model": self.model,
+            "messages": messages.iter().map(Message::to_wire).collect::<Vec<_>>(),
+        });
+
+        if !tools.is_empty() {
+            body["tools"] = Value::Array(
+                tools
+                    .iter()
+                    .map(|t| {
+                        json!({
+                            "type": "function",
+                            "function": {
+                                "name": t.name,
+                                "description": t.description,
+                                "parameters": t.parameters,
+                            },
+                        })
+                    })
+                    .collect(),
+            );
+        }
+
+        if stream {
+            body["stream"] = Value::Bool(true);
+        }
+
+        body
+    }
+
+    async fn send_request(&self, body: &Value) -> Result<reqwest::Response> {
+        let resp = self
+            .client
+            .post(format!("{}/chat/completions", self.base_url))
+            .bearer_auth(&self.api_key)
+            .json(body)
+            .send()
+            .await
+            .map_err(|e| VoloError::Other(format!("LLM request failed: {}", e)))?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            let text = resp.text().await.unwrap_or_default();
+            let snippet: String = text.chars().take(300).collect();
+            return Err(VoloError::Other(format!(
+                "LLM request failed ({}): {}",
+                status, snippet
+            )));
+        }
+
+        Ok(resp)
+    }
 }
 
 impl ChatBackend for OpenAiBackend {
@@ -159,47 +361,8 @@ impl ChatBackend for OpenAiBackend {
         tools: &'a [ToolSpec],
     ) -> Pin<Box<dyn Future<Output = Result<ChatResponse>> + Send + 'a>> {
         Box::pin(async move {
-            let mut body = json!({
-                "model": self.model,
-                "messages": messages.iter().map(Message::to_wire).collect::<Vec<_>>(),
-            });
-
-            if !tools.is_empty() {
-                body["tools"] = Value::Array(
-                    tools
-                        .iter()
-                        .map(|t| {
-                            json!({
-                                "type": "function",
-                                "function": {
-                                    "name": t.name,
-                                    "description": t.description,
-                                    "parameters": t.parameters,
-                                },
-                            })
-                        })
-                        .collect(),
-                );
-            }
-
-            let resp = self
-                .client
-                .post(format!("{}/chat/completions", self.base_url))
-                .bearer_auth(&self.api_key)
-                .json(&body)
-                .send()
-                .await
-                .map_err(|e| VoloError::Other(format!("LLM request failed: {}", e)))?;
-
-            let status = resp.status();
-            if !status.is_success() {
-                let text = resp.text().await.unwrap_or_default();
-                let snippet: String = text.chars().take(300).collect();
-                return Err(VoloError::Other(format!(
-                    "LLM request failed ({}): {}",
-                    status, snippet
-                )));
-            }
+            let body = self.request_body(messages, tools, false);
+            let resp = self.send_request(&body).await?;
 
             let payload: Value = resp
                 .json()
@@ -247,6 +410,33 @@ impl ChatBackend for OpenAiBackend {
             })
         })
     }
+
+    fn chat_stream<'a>(
+        &'a self,
+        messages: &'a [Message],
+        tools: &'a [ToolSpec],
+        on_delta: &'a mut (dyn FnMut(String) + Send),
+    ) -> Pin<Box<dyn Future<Output = Result<ChatResponse>> + Send + 'a>> {
+        use futures_util::StreamExt;
+
+        Box::pin(async move {
+            let body = self.request_body(messages, tools, true);
+            let resp = self.send_request(&body).await?;
+
+            let mut acc = SseAccumulator::new();
+            let mut stream = resp.bytes_stream();
+            while let Some(chunk) = stream.next().await {
+                let bytes = chunk
+                    .map_err(|e| VoloError::Other(format!("LLM stream read failed: {}", e)))?;
+                let text = String::from_utf8_lossy(&bytes);
+                for delta in acc.feed(&text) {
+                    on_delta(delta);
+                }
+            }
+
+            acc.finish()
+        })
+    }
 }
 
 #[cfg(test)]
@@ -292,5 +482,115 @@ mod tests {
         let backend =
             OpenAiBackend::new("https://api.deepseek.com/v1/".to_string(), "m".into(), "k".into());
         assert_eq!(backend.base_url, "https://api.deepseek.com/v1");
+    }
+
+    // ============ SSE 解析 ============
+
+    fn sse_content_chunk(content: &str) -> String {
+        format!(
+            "data: {}\n\n",
+            json!({"choices": [{"delta": {"content": content}}]})
+        )
+    }
+
+    #[test]
+    fn test_sse_content_deltas_in_order() {
+        let mut acc = SseAccumulator::new();
+        let mut deltas = Vec::new();
+        deltas.extend(acc.feed(&sse_content_chunk("你好")));
+        deltas.extend(acc.feed(&sse_content_chunk("，")));
+        deltas.extend(acc.feed(&sse_content_chunk("世界")));
+        deltas.extend(acc.feed("data: [DONE]\n\n"));
+
+        assert_eq!(deltas, vec!["你好", "，", "世界"]);
+        let resp = acc.finish().unwrap();
+        assert_eq!(resp.content.as_deref(), Some("你好，世界"));
+        assert!(resp.tool_calls.is_empty());
+    }
+
+    #[test]
+    fn test_sse_chunk_split_mid_line() {
+        let mut acc = SseAccumulator::new();
+        let chunk = sse_content_chunk("abc");
+        // 在行中间切断喂入
+        let (a, b) = chunk.split_at(chunk.len() / 2);
+        assert!(acc.feed(a).is_empty());
+        assert_eq!(acc.feed(b), vec!["abc"]);
+        assert_eq!(acc.finish().unwrap().content.as_deref(), Some("abc"));
+    }
+
+    #[test]
+    fn test_sse_tool_calls_fragmented_merge() {
+        let mut acc = SseAccumulator::new();
+        // 第一个分片：id + name；后续分片：arguments 分段到达
+        let chunks = [
+            json!({"choices": [{"delta": {"tool_calls": [
+                {"index": 0, "id": "call_1", "function": {"name": "fs_read", "arguments": ""}}
+            ]}}]}),
+            json!({"choices": [{"delta": {"tool_calls": [
+                {"index": 0, "function": {"arguments": "{\"path\":"}}
+            ]}}]}),
+            json!({"choices": [{"delta": {"tool_calls": [
+                {"index": 0, "function": {"arguments": "\"/tmp/a.txt\"}"}}
+            ]}}]}),
+        ];
+        for chunk in chunks {
+            assert!(acc.feed(&format!("data: {}\n\n", chunk)).is_empty());
+        }
+        acc.feed("data: [DONE]\n\n");
+
+        let resp = acc.finish().unwrap();
+        assert_eq!(resp.tool_calls.len(), 1);
+        assert_eq!(resp.tool_calls[0].id, "call_1");
+        assert_eq!(resp.tool_calls[0].name, "fs_read");
+        assert_eq!(resp.tool_calls[0].arguments, json!({"path": "/tmp/a.txt"}));
+        assert!(resp.content.is_none());
+    }
+
+    #[test]
+    fn test_sse_done_terminates_and_skips_following() {
+        let mut acc = SseAccumulator::new();
+        acc.feed("data: [DONE]\n\n");
+        // [DONE] 之后的行被忽略
+        assert!(acc.feed(&sse_content_chunk("不应出现")).is_empty());
+        assert!(acc.finish().unwrap().content.is_none());
+    }
+
+    #[test]
+    fn test_sse_skips_comments_empty_and_garbage_lines() {
+        let mut acc = SseAccumulator::new();
+        let deltas = acc.feed(": keep-alive\n\nevent: message\nnot json at all\n");
+        assert!(deltas.is_empty());
+        let deltas = acc.feed(&sse_content_chunk("ok"));
+        assert_eq!(deltas, vec!["ok"]);
+    }
+
+    /// 默认 chat_stream：回退为一次性回调完整 content
+    #[tokio::test]
+    async fn test_default_chat_stream_fallback() {
+        struct EchoBackend;
+        impl ChatBackend for EchoBackend {
+            fn chat<'a>(
+                &'a self,
+                _messages: &'a [Message],
+                _tools: &'a [ToolSpec],
+            ) -> Pin<Box<dyn Future<Output = Result<ChatResponse>> + Send + 'a>> {
+                Box::pin(async move {
+                    Ok(ChatResponse {
+                        content: Some("完整回答".to_string()),
+                        tool_calls: vec![],
+                    })
+                })
+            }
+        }
+
+        let backend = EchoBackend;
+        let mut deltas = Vec::new();
+        let resp = backend
+            .chat_stream(&[], &[], &mut |d| deltas.push(d))
+            .await
+            .unwrap();
+        assert_eq!(deltas, vec!["完整回答"]);
+        assert_eq!(resp.content.as_deref(), Some("完整回答"));
     }
 }

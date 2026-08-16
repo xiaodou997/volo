@@ -6,6 +6,7 @@
 import { computed, onMounted, ref, nextTick, watch } from 'vue';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { invoke } from '@tauri-apps/api/core';
+import { check } from '@tauri-apps/plugin-updater';
 import SearchInput from './components/SearchInput.vue';
 import ResultList from './components/ResultList.vue';
 import PluginView from './components/PluginView.vue';
@@ -16,6 +17,7 @@ import PluginManager from './components/PluginManager.vue';
 import ApprovalDialog from './components/ApprovalDialog.vue';
 import { useSearchStore } from './stores/search';
 import { runCommand } from './bridge/commandRunner';
+import { initToolRunner } from './bridge/toolRunner';
 import './api/rubick';
 
 const mainWindow = getCurrentWindow();
@@ -255,8 +257,28 @@ watch(() => searchStore.results, () => {
   }
 });
 
+// 启动时静默检查更新，有新版本发系统通知；失败静默
+async function silentCheckUpdate() {
+  try {
+    const update = await check();
+    if (update) {
+      await invoke('notification_show', {
+        options: {
+          title: 'Volo 更新',
+          body: `发现新版本 ${update.version}，可到设置页更新`,
+        },
+      });
+    }
+  } catch {
+    // 静默失败（无网络、无 release 等）
+  }
+}
+
 // 失焦隐藏
 onMounted(async () => {
+  void silentCheckUpdate();
+  // 插件工具执行器：监听 Rust 侧 Agent 的 plugin-tool-call，常驻整个 App 生命周期
+  void initToolRunner();
   const unlisten = await mainWindow.onFocusChanged(({ payload }: { payload: boolean }) => {
     if (!payload && !settingsMode.value && !pluginManagerMode.value && !pluginMode.value && !agentMode.value) {
       // 失焦时隐藏（排除设置模式、插件管理模式、插件模式和 Agent 模式）

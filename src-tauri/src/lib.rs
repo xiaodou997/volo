@@ -22,6 +22,8 @@ pub fn run() {
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_positioner::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         // 初始化状态
         .setup(|app| {
             // 初始化日志
@@ -57,6 +59,8 @@ pub fn run() {
             // AI Agent
             ai::agent::agent_ask,
             ai::agent::agent_cancel,
+            ai::plugin_tools::plugin_tool_result,
+            ai::session::open_sessions_dir,
             // 快捷键
             core::shortcut::register_shortcut,
             core::shortcut::unregister_shortcut,
@@ -123,6 +127,7 @@ pub fn run() {
             plugin::runner::get_plugin_html,
             plugin::runner::get_plugin_asset_path,
             plugin::runner::get_plugin_command_source,
+            plugin::runner::get_plugin_tool_source,
             plugin::runner::load_plugin,
             plugin::runner::unload_plugin,
         ])

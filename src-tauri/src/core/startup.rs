@@ -94,6 +94,9 @@ impl StartupManager {
         // Agent 会话管理器（取消标志等轻量状态）
         app.manage(crate::ai::agent::AgentManager::new());
 
+        // 插件工具桥（agent ↔ 前端沙箱的挂起调用）
+        app.manage(crate::ai::plugin_tools::PluginToolState::new());
+
         Ok(())
     }
 

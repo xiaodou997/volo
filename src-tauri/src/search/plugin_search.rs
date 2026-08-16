@@ -128,6 +128,7 @@ mod tests {
                     run: "command.js".to_string(),
                     icon: None,
                 }],
+                tools: vec![],
             },
         }
     }

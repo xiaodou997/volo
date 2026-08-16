@@ -91,25 +91,32 @@ pub fn get_plugin_asset_path(
     Ok(asset_path.to_string_lossy().to_string())
 }
 
+/// 解析插件目录内的源码路径，防止路径穿越脱出插件目录
+///
+/// command 与 tool 的 run 字段共用；run 指向的文件不存在时返回 NotFound
+pub fn resolve_run_source(plugin: &Plugin, run: &str) -> Result<PathBuf> {
+    let base = plugin.path.canonicalize()
+        .map_err(|e| VoloError::Plugin(format!("Failed to resolve plugin dir: {}", e)))?;
+    let source_path = base.join(run).canonicalize()
+        .map_err(|_| VoloError::NotFound(run.to_string()))?;
+
+    if !source_path.starts_with(&base) {
+        return Err(VoloError::Plugin(format!(
+            "Run source path escapes plugin directory: {}",
+            run
+        )));
+    }
+
+    Ok(source_path)
+}
+
 /// 解析命令源码路径，防止路径穿越脱出插件目录
 fn resolve_command_source(plugin: &Plugin, command_id: &str) -> Result<PathBuf> {
     let command = plugin.contributes.commands.iter()
         .find(|c| c.id == command_id)
         .ok_or_else(|| VoloError::NotFound(command_id.to_string()))?;
 
-    let base = plugin.path.canonicalize()
-        .map_err(|e| VoloError::Plugin(format!("Failed to resolve plugin dir: {}", e)))?;
-    let source_path = base.join(&command.run).canonicalize()
-        .map_err(|_| VoloError::NotFound(command.run.clone()))?;
-
-    if !source_path.starts_with(&base) {
-        return Err(VoloError::Plugin(format!(
-            "Command source path escapes plugin directory: {}",
-            command.run
-        )));
-    }
-
-    Ok(source_path)
+    resolve_run_source(plugin, &command.run)
 }
 
 /// 获取命令（no-view）扩展的源码
@@ -126,6 +133,26 @@ pub fn get_plugin_command_source(
 
     std::fs::read_to_string(&source_path)
         .map_err(|e| VoloError::Other(format!("Failed to read command source: {}", e)))
+}
+
+/// 获取工具（Agent 可调用）扩展的源码
+#[tauri::command]
+pub fn get_plugin_tool_source(
+    plugin_id: String,
+    tool_id: String,
+    state: tauri::State<'_, crate::plugin::manager::PluginState>,
+) -> Result<String> {
+    let plugin = state.get_plugin(&plugin_id)
+        .ok_or_else(|| VoloError::NotFound(plugin_id.clone()))?;
+
+    let tool = plugin.contributes.tools.iter()
+        .find(|t| t.id == tool_id)
+        .ok_or_else(|| VoloError::NotFound(tool_id.clone()))?;
+
+    let source_path = resolve_run_source(&plugin, &tool.run)?;
+
+    std::fs::read_to_string(&source_path)
+        .map_err(|e| VoloError::Other(format!("Failed to read tool source: {}", e)))
 }
 
 #[tauri::command]
@@ -177,6 +204,7 @@ mod tests {
                     run: run.to_string(),
                     icon: None,
                 }],
+                tools: vec![],
             },
         }
     }
@@ -223,6 +251,33 @@ mod tests {
 
         let plugin = make_plugin(plugin_dir, "../evil.js");
         let result = resolve_command_source(&plugin, "cmd");
+        assert!(matches!(result, Err(VoloError::Plugin(_))));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_resolve_run_source_tool_ok() {
+        let dir = temp_plugin_dir("tool_source_ok");
+        std::fs::write(dir.join("tool.js"), "rubick.tool.onInvoke(() => 42);").unwrap();
+
+        let plugin = make_plugin(dir.clone(), "command.js");
+        let path = resolve_run_source(&plugin, "tool.js").unwrap();
+        assert!(path.ends_with("tool.js"));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_resolve_run_source_tool_path_traversal_rejected() {
+        let dir = temp_plugin_dir("tool_traversal");
+        let plugin_dir = dir.join("plugin");
+        std::fs::create_dir_all(&plugin_dir).unwrap();
+        // 在插件目录外放置一个文件
+        std::fs::write(dir.join("evil.js"), "evil();").unwrap();
+
+        let plugin = make_plugin(plugin_dir, "command.js");
+        let result = resolve_run_source(&plugin, "../evil.js");
         assert!(matches!(result, Err(VoloError::Plugin(_))));
 
         std::fs::remove_dir_all(&dir).ok();

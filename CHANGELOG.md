@@ -5,7 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] 1.3.0
+## [Unreleased] 1.5.0
+
+### Added
+- Tool（AI 工具）扩展类型：Manifest v2 `contributes.tools`，插件向内置 Agent 贡献 LLM function-calling 工具
+- 工具命名空间：`<pluginId>__<toolId>` 清洗注册（如 `volo-uuid-gen__gen_uuid`），跨插件防重名
+- 工具执行模型：隐藏 iframe + postMessage 桥（复用 Command 执行环境），30s 超时自动销毁
+- `plugin-tool-call` / `plugin_tool_result` 前后端往返协议；`get_plugin_tool_source` 命令（路径穿越防护）
+- 插件侧 `rubick.tool.onInvoke(handler)` API
+- 内置插件 uuid-gen 增加 `gen_uuid` 工具示范（Agent 可自动调用生成 UUID）
+
+### Fixed
+- 修复内置插件已安装旧版本时不随应用升级覆盖更新的问题（播种改为版本对比，副本损坏自动重装）
+- Agent system prompt 明确"匹配到工具必须调用，禁止凭记忆编造结果"，并声明插件工具命名规则
+
+## [1.4.0] - 2026-08-16
+
+### Added
+- LLM 流式输出：SSE 逐字渲染，工具调用分片合并不受影响
+- Agent 回答 Markdown 渲染（marked + DOMPurify 消毒）
+- Agent 会话事件日志：sessions/*.jsonl，覆盖输入/工具调用/结果/回答，30 天自动清理
+- 自动更新：tauri-plugin-updater + GitHub Release 签名管线（minisign），启动时静默检查 + 设置页手动检查/一键更新
+- 设置页"关于与更新"区块：动态版本号、更新进度、会话日志目录入口
+
+### Fixed
+- 修复直接粘贴输入（Cmd+V / 菜单粘贴）不触发"问 AI"入口与结果刷新的问题（macOS 原生编辑菜单 + paste 事件）
+- 修复结果列表高度不随内容变化刷新的问题
+
+## [1.3.0] - 2026-08-16
 
 ### Added
 - AI 初体验：启动器"问 AI"入口 + 内置 Agent（OpenAI 兼容协议，OpenAI/DeepSeek/Ollama 均可接入）
@@ -15,7 +42,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - AgentView：工具调用时间线渲染，可取消会话
 - 设置页"AI 设置"区块
 
-## [Unreleased] 1.2.0
+## [1.2.0] - 2026-08-16
 
 ### Added
 - Command（无界面）扩展类型：Manifest v2 `contributes.commands`，搜索即得、回车即执行
@@ -26,7 +53,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - 修复 `Plugin.path` 缺 serde default 导致插件目录扫描静默失败的问题
 
-## [Unreleased] 1.1.0
+## [1.1.0] - 2026-08-16
 
 ### Added
 - Capability Registry：系统能力统一登记，带风险分级（Low/Medium/High/Critical）

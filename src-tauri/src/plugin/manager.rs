@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use tauri::{AppHandle, Manager};
 use tracing::{info, warn};
@@ -37,6 +37,8 @@ pub struct Plugin {
 pub struct Contributes {
     #[serde(default)]
     pub commands: Vec<CommandSpec>,
+    #[serde(default)]
+    pub tools: Vec<ToolManifestSpec>,
 }
 
 /// 命令（no-view）扩展定义
@@ -51,6 +53,28 @@ pub struct CommandSpec {
     pub run: String,
     #[serde(default)]
     pub icon: Option<String>,
+}
+
+/// 工具（Agent 可调用）扩展定义
+///
+/// parameters 是工具的入参 JSON Schema（透传给 LLM），必须是 object 类型；
+/// manifest 缺省时补默认空 object schema，加载时校验（见 load_plugin_from_dir）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolManifestSpec {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default = "default_object_schema")]
+    pub parameters: serde_json::Value,
+    pub run: String,
+    #[serde(default)]
+    pub icon: Option<String>,
+}
+
+/// 工具入参的默认 JSON Schema：空 object
+pub fn default_object_schema() -> serde_json::Value {
+    serde_json::json!({ "type": "object", "properties": {} })
 }
 
 /// 插件功能
@@ -93,7 +117,7 @@ impl PluginState {
             plugins_dir,
         };
 
-        // 首次启动时播种内置插件（不覆盖已有安装）
+        // 播种内置插件（已安装且版本一致的跳过，版本变化时覆盖更新）
         state.seed_builtin_plugins(app);
 
         // 扫描已安装的插件
@@ -104,7 +128,7 @@ impl PluginState {
         Ok(state)
     }
 
-    /// 把内置插件复制到插件目录（已存在的跳过）
+    /// 把内置插件复制到插件目录（版本变化或已安装副本损坏时覆盖更新）
     fn seed_builtin_plugins(&self, app: &AppHandle) {
         let Some(source) = builtin_plugins_dir(app) else {
             return;
@@ -127,8 +151,14 @@ impl PluginState {
                 continue;
             };
             let target = self.plugins_dir.join(&plugin.id);
-            if target.exists() {
+            if !should_reseed(&target, &plugin.version) {
                 continue;
+            }
+            if target.exists() {
+                if let Err(e) = std::fs::remove_dir_all(&target) {
+                    warn!("Failed to remove outdated builtin plugin {}: {}", plugin.id, e);
+                    continue;
+                }
             }
             match copy_dir_all(&path, &target) {
                 Ok(()) => info!("Seeded builtin plugin: {} ({})", plugin.name, plugin.id),
@@ -253,6 +283,18 @@ fn builtin_plugins_dir(app: &AppHandle) -> Option<PathBuf> {
     }
 }
 
+/// 判断内置插件是否需要（重新）播种：
+/// 目标目录不存在、已安装副本损坏、或已安装版本与内置版本不一致时返回 true
+fn should_reseed(target: &Path, bundled_version: &str) -> bool {
+    if !target.exists() {
+        return true;
+    }
+    match load_plugin_from_dir(&target.to_path_buf()) {
+        Ok(installed) => installed.version != bundled_version,
+        Err(_) => true,
+    }
+}
+
 /// 从目录加载插件
 fn load_plugin_from_dir(dir: &PathBuf) -> Result<Plugin> {
     let plugin_json_path = dir.join("plugin.json");
@@ -276,6 +318,31 @@ fn load_plugin_from_dir(dir: &PathBuf) -> Result<Plugin> {
     }
     if plugin.main.is_empty() {
         plugin.main = "index.html".to_string();
+    }
+
+    // 校验工具贡献点：parameters 必须是 object 类型 schema，run 必须非空
+    for tool in &plugin.contributes.tools {
+        if tool.id.is_empty() {
+            return Err(VoloError::Plugin("Tool id is required".to_string()));
+        }
+        if tool.name.is_empty() {
+            return Err(VoloError::Plugin(format!(
+                "Tool '{}' name is required",
+                tool.id
+            )));
+        }
+        if tool.run.trim().is_empty() {
+            return Err(VoloError::Plugin(format!(
+                "Tool '{}' run is required",
+                tool.id
+            )));
+        }
+        if tool.parameters.get("type").and_then(serde_json::Value::as_str) != Some("object") {
+            return Err(VoloError::Plugin(format!(
+                "Tool '{}' parameters must be an object-type JSON Schema",
+                tool.id
+            )));
+        }
     }
 
     Ok(plugin)
@@ -395,6 +462,31 @@ mod tests {
     }
 
     #[test]
+    fn test_should_reseed() {
+        // 目标目录不存在 → 需要播种
+        let missing = std::env::temp_dir().join(format!("volo_reseed_missing_{}", uuid::Uuid::new_v4()));
+        assert!(should_reseed(&missing, "1.0.0"));
+
+        let dir = temp_plugin_dir("reseed");
+
+        // 已安装副本损坏（无 plugin.json）→ 需要重播
+        assert!(should_reseed(&dir, "1.0.0"));
+
+        // 版本一致 → 跳过
+        std::fs::write(
+            dir.join("plugin.json"),
+            r#"{ "id": "p", "name": "P", "version": "1.1.0" }"#,
+        )
+        .unwrap();
+        assert!(!should_reseed(&dir, "1.1.0"));
+
+        // 版本不一致（内置升级）→ 覆盖重播
+        assert!(should_reseed(&dir, "1.2.0"));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
     fn test_v1_manifest_compatible() {
         let dir = temp_plugin_dir("manifest_v1");
         std::fs::write(
@@ -441,6 +533,159 @@ mod tests {
         let result = load_plugin_from_dir(&dir);
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), VoloError::Json(_)));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_manifest_v2_with_tools() {
+        let dir = temp_plugin_dir("manifest_v2_tools");
+        std::fs::write(
+            dir.join("plugin.json"),
+            r#"{
+                "id": "uuid-gen",
+                "name": "UUID Generator",
+                "version": "1.0.0",
+                "manifestVersion": 2,
+                "contributes": {
+                    "tools": [
+                        {
+                            "id": "gen_uuid",
+                            "name": "生成 UUID",
+                            "description": "生成指定数量的 UUID v4",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {
+                                    "count": { "type": "integer", "description": "数量，默认 1" }
+                                }
+                            },
+                            "run": "tool.js",
+                            "icon": "icon.png"
+                        }
+                    ]
+                }
+            }"#,
+        )
+        .unwrap();
+
+        let plugin = load_plugin_from_dir(&dir).unwrap();
+        assert_eq!(plugin.contributes.tools.len(), 1);
+        let tool = &plugin.contributes.tools[0];
+        assert_eq!(tool.id, "gen_uuid");
+        assert_eq!(tool.name, "生成 UUID");
+        assert_eq!(tool.description.as_deref(), Some("生成指定数量的 UUID v4"));
+        assert_eq!(tool.parameters["type"], "object");
+        assert!(tool.parameters["properties"]["count"].is_object());
+        assert_eq!(tool.run, "tool.js");
+        assert_eq!(tool.icon.as_deref(), Some("icon.png"));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_tool_parameters_default_filled() {
+        let dir = temp_plugin_dir("tool_default_schema");
+        std::fs::write(
+            dir.join("plugin.json"),
+            r#"{
+                "id": "p1",
+                "name": "P1",
+                "version": "1.0.0",
+                "contributes": {
+                    "tools": [
+                        { "id": "noop", "name": "Noop", "run": "tool.js" }
+                    ]
+                }
+            }"#,
+        )
+        .unwrap();
+
+        let plugin = load_plugin_from_dir(&dir).unwrap();
+        let tool = &plugin.contributes.tools[0];
+        // 缺省 parameters 补默认空 object schema
+        assert_eq!(
+            tool.parameters,
+            serde_json::json!({ "type": "object", "properties": {} })
+        );
+        assert!(tool.description.is_none());
+        assert!(tool.icon.is_none());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_tool_invalid_parameters_rejected() {
+        let dir = temp_plugin_dir("tool_bad_schema");
+        std::fs::write(
+            dir.join("plugin.json"),
+            r#"{
+                "id": "bad-plugin",
+                "name": "Bad Plugin",
+                "version": "1.0.0",
+                "contributes": {
+                    "tools": [
+                        {
+                            "id": "bad",
+                            "name": "Bad",
+                            "parameters": { "type": "string" },
+                            "run": "tool.js"
+                        }
+                    ]
+                }
+            }"#,
+        )
+        .unwrap();
+
+        let result = load_plugin_from_dir(&dir);
+        assert!(matches!(result, Err(VoloError::Plugin(_))));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_tool_empty_run_rejected() {
+        let dir = temp_plugin_dir("tool_empty_run");
+        std::fs::write(
+            dir.join("plugin.json"),
+            r#"{
+                "id": "bad-plugin",
+                "name": "Bad Plugin",
+                "version": "1.0.0",
+                "contributes": {
+                    "tools": [
+                        { "id": "bad", "name": "Bad", "run": "  " }
+                    ]
+                }
+            }"#,
+        )
+        .unwrap();
+
+        let result = load_plugin_from_dir(&dir);
+        assert!(matches!(result, Err(VoloError::Plugin(_))));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_tool_missing_run_fails() {
+        let dir = temp_plugin_dir("tool_missing_run");
+        std::fs::write(
+            dir.join("plugin.json"),
+            r#"{
+                "id": "bad-plugin",
+                "name": "Bad Plugin",
+                "version": "1.0.0",
+                "contributes": {
+                    "tools": [
+                        { "id": "no-run", "name": "No Run" }
+                    ]
+                }
+            }"#,
+        )
+        .unwrap();
+
+        let result = load_plugin_from_dir(&dir);
+        assert!(matches!(result, Err(VoloError::Json(_))));
 
         std::fs::remove_dir_all(&dir).ok();
     }

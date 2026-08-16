@@ -39,7 +39,8 @@
           <div class="item-detail">{{ item.text }}</div>
         </template>
         <template v-else>
-          <div class="item-body">{{ item.text }}</div>
+          <div class="item-body markdown-body" v-html="renderMarkdown(item.text)"></div>
+          <span v-if="item.streaming" class="stream-cursor"></span>
         </template>
       </div>
 
@@ -53,7 +54,17 @@
 import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
+import { marked } from 'marked';
+import DOMPurify from 'dompurify';
 import type { AgentEvent } from '../api/rubick';
+
+// LLM 输出按 Markdown 渲染；DOMPurify 消毒防注入（内容来自外部模型，不可信）
+marked.setOptions({ breaks: true });
+
+function renderMarkdown(text: string): string {
+  const html = marked.parse(text, { async: false });
+  return DOMPurify.sanitize(html);
+}
 
 const props = defineProps<{
   query: string;
@@ -67,6 +78,8 @@ interface TimelineItem {
   kind: 'message' | 'tool_call' | 'tool_result' | 'error';
   text: string;
   detail?: string;
+  // 流式输出进行中（末尾显示闪烁光标）
+  streaming?: boolean;
 }
 
 const timeline = ref<TimelineItem[]>([]);
@@ -89,6 +102,22 @@ async function scrollToBottom() {
 
 async function handleEvent(event: AgentEvent) {
   loading.value = false;
+  // 流式增量片段：追加到当前正在流式输出的气泡（没有则新建一个）
+  if (event.kind === 'message' && event.delta) {
+    const last = timeline.value[timeline.value.length - 1];
+    if (last && last.kind === 'message' && last.streaming) {
+      last.text += event.content ?? '';
+    } else {
+      timeline.value.push({ kind: 'message', text: event.content ?? '', streaming: true });
+    }
+    await scrollToBottom();
+    return;
+  }
+  // 任何非增量事件到来，说明上一段流式输出已结束
+  const last = timeline.value[timeline.value.length - 1];
+  if (last?.streaming) {
+    last.streaming = false;
+  }
   switch (event.kind) {
     case 'message':
       if (event.content) {
@@ -246,8 +275,90 @@ onUnmounted(() => {
   font-size: 14px;
   color: var(--text-primary);
   line-height: 1.6;
-  white-space: pre-wrap;
   word-break: break-word;
+}
+
+/* Markdown 渲染内容（v-html 注入，scoped 需 :deep） */
+.markdown-body :deep(p) {
+  margin: 0 0 8px;
+}
+
+.markdown-body :deep(p:last-child) {
+  margin-bottom: 0;
+}
+
+.markdown-body :deep(h1),
+.markdown-body :deep(h2),
+.markdown-body :deep(h3),
+.markdown-body :deep(h4) {
+  margin: 12px 0 6px;
+  font-size: 15px;
+}
+
+.markdown-body :deep(ul),
+.markdown-body :deep(ol) {
+  margin: 4px 0;
+  padding-left: 20px;
+}
+
+.markdown-body :deep(code) {
+  font-family: ui-monospace, monospace;
+  font-size: 13px;
+  background: var(--bg-secondary);
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+
+.markdown-body :deep(pre) {
+  background: var(--bg-secondary);
+  padding: 10px 12px;
+  border-radius: 6px;
+  overflow-x: auto;
+  margin: 8px 0;
+}
+
+.markdown-body :deep(pre code) {
+  background: none;
+  padding: 0;
+}
+
+.markdown-body :deep(blockquote) {
+  margin: 8px 0;
+  padding-left: 12px;
+  border-left: 3px solid var(--border-color);
+  color: var(--text-secondary);
+}
+
+.markdown-body :deep(a) {
+  color: var(--accent-color);
+}
+
+.markdown-body :deep(table) {
+  border-collapse: collapse;
+  margin: 8px 0;
+}
+
+.markdown-body :deep(th),
+.markdown-body :deep(td) {
+  border: 1px solid var(--border-color);
+  padding: 4px 10px;
+  font-size: 13px;
+}
+
+/* 流式输出中的闪烁光标 */
+.stream-cursor {
+  display: inline-block;
+  width: 8px;
+  height: 1em;
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  background: var(--accent-color);
+  animation: blink 0.8s step-end infinite;
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
 }
 
 .timeline-error .item-body {

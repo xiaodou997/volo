@@ -17,6 +17,8 @@ export interface PluginHostHandlers {
   onSubInputSetValue: (text: string) => void;
   /** Command（no-view）命令完成；error 存在表示命令执行出错 */
   onCommandDone?: (error?: string) => void;
+  /** Tool 工具调用完成；ok 为 true 时 data 为返回值，否则 error 为错误文本 */
+  onToolDone?: (ok: boolean, data?: any, error?: string) => void;
 }
 
 export interface PluginHost {
@@ -144,6 +146,13 @@ export function createPluginHost(
         case 'command-done':
           handlers.onCommandDone?.(
             typeof msg.data?.error === 'string' ? msg.data.error : undefined,
+          );
+          break;
+        case 'tool-done':
+          handlers.onToolDone?.(
+            !!msg.ok,
+            msg.data,
+            typeof msg.error === 'string' ? msg.error : undefined,
           );
           break;
       }

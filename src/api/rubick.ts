@@ -82,6 +82,8 @@ export interface LlmConfig {
 export interface AgentEvent {
   kind: 'message' | 'tool_call' | 'tool_result' | 'done' | 'error';
   content?: string;
+  // delta: true 表示 content 是流式增量片段；不带 delta 的 message 是完整消息
+  delta?: boolean;
   name?: string;
   args?: any;
   result?: string;

@@ -10,9 +10,13 @@
  *                   { source: 'volo-plugin', kind: 'subInput', action, data }
  *                   { source: 'volo-plugin', kind: 'exit' }
  *                   { source: 'volo-plugin', kind: 'command-done', data: { error? } }
+ *                   { source: 'volo-plugin', kind: 'tool-done', ok, data | error }
  *   宿主 -> 客户端: { source: 'volo-host', kind: 'api-result', reqId, ok, data, error }
  *                   { source: 'volo-host', kind: 'event', type, data }
  *                   （type 为 'run' 时触发 rubick.command.onRun 注册的回调，data 为 { query }）
+ *
+ *   tool 调用由宿主 bootstrap 脚本直接调 rubick.tool.__invoke(inputJsonString)
+ *   触发（不走 postMessage），结果经 'tool-done' 回传宿主。
  */
 export const PLUGIN_CLIENT_SCRIPT = `(function () {
   if (window.rubick && window.rubick.__isVoloBridge) return;
@@ -21,6 +25,7 @@ export const PLUGIN_CLIENT_SCRIPT = `(function () {
   var pending = {};
   var subInputCallback = null;
   var commandRunCallback = null;
+  var toolCallback = null;
 
   function commandDone(error) {
     window.parent.postMessage({
@@ -30,6 +35,16 @@ export const PLUGIN_CLIENT_SCRIPT = `(function () {
         ? { error: String(error && error.message ? error.message : error) }
         : {}
     }, '*');
+  }
+
+  function toolDone(ok, data, error) {
+    var msg = { source: 'volo-plugin', kind: 'tool-done', ok: !!ok };
+    if (ok) {
+      msg.data = data === undefined ? null : data;
+    } else {
+      msg.error = String(error && error.message ? error.message : error);
+    }
+    window.parent.postMessage(msg, '*');
   }
 
   function call(method, args) {
@@ -110,6 +125,49 @@ export const PLUGIN_CLIENT_SCRIPT = `(function () {
           throw new Error('command.onRun callback is not registered');
         }
         return commandRunCallback(query);
+      }
+    },
+
+    // tool (agent-invoked) entry point: input in, JSON result out
+    tool: {
+      onInvoke: function (cb) { toolCallback = cb; },
+      // host-internal: invoke the registered callback with a JSON input string,
+      // report the result back to the host as 'tool-done'
+      __invoke: function (inputJson) {
+        var input = {};
+        if (typeof inputJson === 'string' && inputJson) {
+          try {
+            input = JSON.parse(inputJson);
+          } catch (parseError) {
+            toolDone(false, undefined, 'invalid tool input JSON: ' + parseError);
+            return;
+          }
+        }
+        if (typeof toolCallback !== 'function') {
+          toolDone(false, undefined, 'tool.onInvoke callback is not registered');
+          return;
+        }
+        var handleResult = function (result) {
+          var json;
+          try {
+            json = JSON.stringify(result === undefined ? null : result);
+          } catch (serError) {
+            toolDone(false, undefined, 'tool result is not JSON serializable: ' + serError);
+            return;
+          }
+          // re-parse so only structured-clone-safe values cross postMessage
+          toolDone(true, JSON.parse(json));
+        };
+        try {
+          var p = toolCallback(input);
+          if (p && typeof p.then === 'function') {
+            p.then(handleResult, function (e) { toolDone(false, undefined, e); });
+          } else {
+            handleResult(p);
+          }
+        } catch (e) {
+          toolDone(false, undefined, e);
+        }
       }
     },
 

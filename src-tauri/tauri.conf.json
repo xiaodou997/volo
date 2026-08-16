@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Volo",
-  "version": "1.0.0",
+  "version": "1.4.0",
   "identifier": "com.volo.app",
   "build": {
     "beforeDevCommand": "pnpm dev",
@@ -81,10 +81,13 @@
   },
   "plugins": {
     "updater": {
-      "active": false,
-      "endpoints": [],
-      "dialog": true,
-      "pubkey": ""
+      "endpoints": [
+        "https://github.com/xiaodou997/volo/releases/latest/download/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDk4ODc5NTQ5NDIxOTE0QjAKUldTd0ZCbENTWldIbUt1NkJIUDFFWXhUd1VXVkdzdkE4Rm5sdWFCQndoenYrVzFCdHlENWl3enUK",
+      "windows": {
+        "installMode": "passive"
+      }
     }
   }
 }
