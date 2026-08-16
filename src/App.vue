@@ -14,6 +14,7 @@ import SettingsView from './components/SettingsView.vue';
 import PluginManager from './components/PluginManager.vue';
 import ApprovalDialog from './components/ApprovalDialog.vue';
 import { useSearchStore } from './stores/search';
+import { runCommand } from './bridge/commandRunner';
 import './api/rubick';
 
 const mainWindow = getCurrentWindow();
@@ -113,6 +114,12 @@ function handleClear() {
     } else if (result.type === 'plugin') {
       // 进入插件模式
       enterPlugin(result.plugin.id, result.feature.id);
+    } else if (result.type === 'command') {
+      // 后台执行无界面命令（错误由 commandRunner 通知），清空搜索并隐藏窗口
+      void runCommand(result.plugin.id, result.command.id, searchStore.query);
+      searchStore.clearSearch();
+      updateWindowSize();
+      await invoke('hide_main_window');
     } else if (result.type === 'file') {
       // 打开文件或文件夹
       await invoke('shell_open_path', { path: result.path });

@@ -9,8 +9,10 @@
  *   客户端 -> 宿主: { source: 'volo-plugin', kind: 'api', reqId, method, args }
  *                   { source: 'volo-plugin', kind: 'subInput', action, data }
  *                   { source: 'volo-plugin', kind: 'exit' }
+ *                   { source: 'volo-plugin', kind: 'command-done', data: { error? } }
  *   宿主 -> 客户端: { source: 'volo-host', kind: 'api-result', reqId, ok, data, error }
  *                   { source: 'volo-host', kind: 'event', type, data }
+ *                   （type 为 'run' 时触发 rubick.command.onRun 注册的回调，data 为 { query }）
  */
 export const PLUGIN_CLIENT_SCRIPT = `(function () {
   if (window.rubick && window.rubick.__isVoloBridge) return;
@@ -18,6 +20,17 @@ export const PLUGIN_CLIENT_SCRIPT = `(function () {
   var reqSeq = 0;
   var pending = {};
   var subInputCallback = null;
+  var commandRunCallback = null;
+
+  function commandDone(error) {
+    window.parent.postMessage({
+      source: 'volo-plugin',
+      kind: 'command-done',
+      data: error
+        ? { error: String(error && error.message ? error.message : error) }
+        : {}
+    }, '*');
+  }
 
   function call(method, args) {
     return new Promise(function (resolve, reject) {
@@ -58,6 +71,19 @@ export const PLUGIN_CLIENT_SCRIPT = `(function () {
         }
         return;
       }
+      if (msg.type === 'run') {
+        if (typeof commandRunCallback === 'function') {
+          try {
+            var runResult = commandRunCallback(msg.data && msg.data.query);
+            if (runResult && typeof runResult.catch === 'function') {
+              runResult.catch(commandDone);
+            }
+          } catch (runError) {
+            commandDone(runError);
+          }
+        }
+        return;
+      }
       var hook = r[msg.type];
       if (typeof hook === 'function') {
         hook(msg.data);
@@ -73,6 +99,19 @@ export const PLUGIN_CLIENT_SCRIPT = `(function () {
     onPluginReady: null,
     onPluginOut: null,
     onQueryChange: null,
+
+    // command (no-view) entry point
+    command: {
+      onRun: function (cb) { commandRunCallback = cb; },
+      done: function (error) { commandDone(error); },
+      // host-internal: invoke the registered callback with the query string
+      __trigger: function (query) {
+        if (typeof commandRunCallback !== 'function') {
+          throw new Error('command.onRun callback is not registered');
+        }
+        return commandRunCallback(query);
+      }
+    },
 
     // window
     window: {

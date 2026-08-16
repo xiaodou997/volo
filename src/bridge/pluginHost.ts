@@ -15,6 +15,8 @@ export interface PluginHostHandlers {
   onSubInputShow: (data: { placeholder?: string }) => void;
   onSubInputHide: () => void;
   onSubInputSetValue: (text: string) => void;
+  /** Command（no-view）命令完成；error 存在表示命令执行出错 */
+  onCommandDone?: (error?: string) => void;
 }
 
 export interface PluginHost {
@@ -138,6 +140,11 @@ export function createPluginHost(
           break;
         case 'exit':
           handlers.onExit();
+          break;
+        case 'command-done':
+          handlers.onCommandDone?.(
+            typeof msg.data?.error === 'string' ? msg.data.error : undefined,
+          );
           break;
       }
       return true;

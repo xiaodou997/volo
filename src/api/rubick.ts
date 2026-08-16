@@ -43,6 +43,13 @@ export interface FeatureInfo {
   keywords: string[];
 }
 
+export interface CommandInfo {
+  id: string;
+  name: string;
+  keywords: string[];
+  description?: string;
+}
+
 export interface PluginInfo {
   id: string;
   name: string;
@@ -53,6 +60,7 @@ export interface PluginInfo {
 export type SearchResult =
   | { type: 'app'; name: string; path: string; icon?: string; pinyin?: string; initials?: string }
   | { type: 'plugin'; plugin: PluginInfo; feature: FeatureInfo }
+  | { type: 'command'; plugin: PluginInfo; command: CommandInfo }
   | { type: 'file'; path: string; name: string; file_type: string; extension?: string };
 
 // 文件信息（来自索引）

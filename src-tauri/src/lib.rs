@@ -113,6 +113,7 @@ pub fn run() {
             plugin::runner::get_plugin_runtime,
             plugin::runner::get_plugin_html,
             plugin::runner::get_plugin_asset_path,
+            plugin::runner::get_plugin_command_source,
             plugin::runner::load_plugin,
             plugin::runner::unload_plugin,
         ])

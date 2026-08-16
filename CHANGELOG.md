@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] 1.2.0
+
+### Added
+- Command（无界面）扩展类型：Manifest v2 `contributes.commands`，搜索即得、回车即执行
+- 命令执行器：隐藏 opaque-origin iframe + postMessage 桥，复用权限管道，10s 超时自动销毁
+- `get_plugin_command_source` 命令，路径穿越防护
+- 内置示范插件 uuid-gen（生成 UUID 到剪贴板）
+
+### Fixed
+- 修复 `Plugin.path` 缺 serde default 导致插件目录扫描静默失败的问题
+
 ## [Unreleased] 1.1.0
 
 ### Added

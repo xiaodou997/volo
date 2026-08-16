@@ -45,6 +45,20 @@
         </div>
       </template>
 
+      <!-- 命令结果 -->
+      <template v-else-if="result.type === 'command'">
+        <div class="result-icon">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="4 17 10 11 4 5"/>
+            <line x1="12" y1="19" x2="20" y2="19"/>
+          </svg>
+        </div>
+        <div class="result-content">
+          <div class="result-title">{{ result.command.name }}</div>
+          <div class="result-subtitle">{{ result.plugin.name }}</div>
+        </div>
+      </template>
+
       <!-- 文件结果 -->
       <template v-else-if="result.type === 'file'">
         <div class="result-icon">
@@ -86,6 +100,9 @@ function getKey(result: SearchResult, index: number): string {
   }
   if (result.type === 'plugin') {
     return `plugin-${result.plugin.id}-${result.feature.id}-${index}`;
+  }
+  if (result.type === 'command') {
+    return `command-${result.plugin.id}-${result.command.id}-${index}`;
   }
   return `file-${result.path}-${index}`;
 }

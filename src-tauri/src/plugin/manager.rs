@@ -18,6 +18,7 @@ pub struct Plugin {
     pub version: String,
     #[serde(default)]
     pub main: String,
+    #[serde(default)]
     pub path: PathBuf,
     #[serde(default)]
     pub features: Vec<Feature>,
@@ -25,6 +26,29 @@ pub struct Plugin {
     pub permissions: Vec<String>,
     #[serde(default)]
     pub description: Option<String>,
+    #[serde(default)]
+    pub icon: Option<String>,
+    #[serde(default)]
+    pub contributes: Contributes,
+}
+
+/// 插件贡献点（Manifest v2）
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Contributes {
+    #[serde(default)]
+    pub commands: Vec<CommandSpec>,
+}
+
+/// 命令（no-view）扩展定义
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommandSpec {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub keywords: Vec<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    pub run: String,
     #[serde(default)]
     pub icon: Option<String>,
 }
@@ -69,12 +93,48 @@ impl PluginState {
             plugins_dir,
         };
 
+        // 首次启动时播种内置插件（不覆盖已有安装）
+        state.seed_builtin_plugins(app);
+
         // 扫描已安装的插件
         if let Err(e) = state.scan_plugins() {
             warn!("Failed to scan plugins: {}", e);
         }
 
         Ok(state)
+    }
+
+    /// 把内置插件复制到插件目录（已存在的跳过）
+    fn seed_builtin_plugins(&self, app: &AppHandle) {
+        let Some(source) = builtin_plugins_dir(app) else {
+            return;
+        };
+
+        let entries = match std::fs::read_dir(&source) {
+            Ok(entries) => entries,
+            Err(e) => {
+                warn!("Failed to read builtin plugins dir {:?}: {}", source, e);
+                return;
+            }
+        };
+
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            let Ok(plugin) = load_plugin_from_dir(&path) else {
+                continue;
+            };
+            let target = self.plugins_dir.join(&plugin.id);
+            if target.exists() {
+                continue;
+            }
+            match copy_dir_all(&path, &target) {
+                Ok(()) => info!("Seeded builtin plugin: {} ({})", plugin.name, plugin.id),
+                Err(e) => warn!("Failed to seed builtin plugin {}: {}", plugin.id, e),
+            }
+        }
     }
 
     /// 扫描插件目录
@@ -176,6 +236,23 @@ impl PluginState {
     }
 }
 
+/// 内置插件源目录：生产包读资源目录，开发模式读仓库内 plugins/
+fn builtin_plugins_dir(app: &AppHandle) -> Option<PathBuf> {
+    if let Ok(dir) = app.path().resource_dir() {
+        let bundled = dir.join("plugins");
+        if bundled.exists() {
+            return Some(bundled);
+        }
+    }
+
+    let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../plugins");
+    if dev.exists() {
+        Some(dev)
+    } else {
+        None
+    }
+}
+
 /// 从目录加载插件
 fn load_plugin_from_dir(dir: &PathBuf) -> Result<Plugin> {
     let plugin_json_path = dir.join("plugin.json");
@@ -265,4 +342,106 @@ pub async fn install_plugin(
     _state: tauri::State<'_, PluginState>,
 ) -> Result<Plugin> {
     Err(VoloError::Plugin("Use install_plugin_from_dir instead".to_string()))
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_plugin_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("volo_plugin_test_{}_{}", name, uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn test_manifest_v2_with_commands() {
+        let dir = temp_plugin_dir("manifest_v2");
+        std::fs::write(
+            dir.join("plugin.json"),
+            r#"{
+                "id": "uuid-gen",
+                "name": "UUID Generator",
+                "version": "1.0.0",
+                "manifestVersion": 2,
+                "contributes": {
+                    "commands": [
+                        {
+                            "id": "gen-uuid",
+                            "name": "Generate UUID",
+                            "keywords": ["uuid"],
+                            "description": "Generate a UUID and copy it",
+                            "run": "command.js",
+                            "icon": "icon.png"
+                        }
+                    ]
+                }
+            }"#,
+        )
+        .unwrap();
+
+        let plugin = load_plugin_from_dir(&dir).unwrap();
+        assert_eq!(plugin.id, "uuid-gen");
+        // manifestVersion 字段被忽略
+        assert_eq!(plugin.contributes.commands.len(), 1);
+        let cmd = &plugin.contributes.commands[0];
+        assert_eq!(cmd.id, "gen-uuid");
+        assert_eq!(cmd.name, "Generate UUID");
+        assert_eq!(cmd.keywords, vec!["uuid"]);
+        assert_eq!(cmd.description.as_deref(), Some("Generate a UUID and copy it"));
+        assert_eq!(cmd.run, "command.js");
+        assert_eq!(cmd.icon.as_deref(), Some("icon.png"));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_v1_manifest_compatible() {
+        let dir = temp_plugin_dir("manifest_v1");
+        std::fs::write(
+            dir.join("plugin.json"),
+            r#"{
+                "id": "hello-world",
+                "name": "Hello World",
+                "version": "1.0.0",
+                "main": "index.html",
+                "features": [
+                    { "id": "hello", "name": "Hello", "keywords": ["hi"] }
+                ]
+            }"#,
+        )
+        .unwrap();
+
+        let plugin = load_plugin_from_dir(&dir).unwrap();
+        assert_eq!(plugin.id, "hello-world");
+        assert_eq!(plugin.features.len(), 1);
+        // v1 插件无 contributes 字段，默认为空
+        assert!(plugin.contributes.commands.is_empty());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_command_missing_run_fails() {
+        let dir = temp_plugin_dir("missing_run");
+        std::fs::write(
+            dir.join("plugin.json"),
+            r#"{
+                "id": "bad-plugin",
+                "name": "Bad Plugin",
+                "version": "1.0.0",
+                "contributes": {
+                    "commands": [
+                        { "id": "no-run", "name": "No Run" }
+                    ]
+                }
+            }"#,
+        )
+        .unwrap();
+
+        let result = load_plugin_from_dir(&dir);
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), VoloError::Json(_)));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }

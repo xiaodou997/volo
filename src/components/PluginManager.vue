@@ -157,11 +157,11 @@ async function uninstallPlugin(plugin: Plugin) {
   }
   
   try {
-    await invoke('uninstall_plugin', { pluginId: plugin.id });
+    await invoke('uninstall_plugin', { id: plugin.id });
     await loadPlugins();
   } catch (e) {
     console.error('Failed to uninstall plugin:', e);
-    alert('卸载失败');
+    alert(`卸载失败：${e}`);
   }
 }
 
@@ -176,7 +176,7 @@ async function selectPluginDir() {
     }
   } catch (e) {
     console.error('Failed to install plugin:', e);
-    alert('安装失败');
+    alert(`安装失败：${e}`);
   }
 }
 

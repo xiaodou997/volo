@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 use crate::search::app_cache::{AppCache, AppInfo};
 use crate::search::history::SearchHistoryManager;
-use crate::search::plugin_search::{search_plugins, PluginInfo};
+use crate::search::plugin_search::{search_plugins, PluginInfo, PluginSearchResult};
 use crate::search::file_index::FileIndex;
 use crate::plugin::manager::PluginState;
 
@@ -13,6 +13,7 @@ use crate::plugin::manager::PluginState;
 pub enum SearchResult {
     App(AppInfo),
     Plugin { plugin: PluginInfo, feature: FeatureInfo },
+    Command { plugin: PluginInfo, command: CommandInfo },
     File { path: String, name: String, file_type: String, extension: Option<String> },
 }
 
@@ -22,6 +23,15 @@ pub struct FeatureInfo {
     pub id: String,
     pub name: String,
     pub keywords: Vec<String>,
+}
+
+/// 命令信息
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommandInfo {
+    pub id: String,
+    pub name: String,
+    pub keywords: Vec<String>,
+    pub description: Option<String>,
 }
 
 /// 带评分的应用信息
@@ -154,13 +164,17 @@ pub fn search(
         results.push(SearchResult::App(app));
     }
 
-    // 搜索插件
+    // 搜索插件（功能与命令）
     let plugins = plugin_state.get_all_plugins();
     for plugin_result in search_plugins(&plugins, &query) {
-        results.push(SearchResult::Plugin {
-            plugin: plugin_result.plugin,
-            feature: plugin_result.feature,
-        });
+        match plugin_result {
+            PluginSearchResult::Feature { plugin, feature } => {
+                results.push(SearchResult::Plugin { plugin, feature });
+            }
+            PluginSearchResult::Command { plugin, command } => {
+                results.push(SearchResult::Command { plugin, command });
+            }
+        }
     }
 
     // 搜索文件（使用新的索引）

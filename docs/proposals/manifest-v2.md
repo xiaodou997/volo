@@ -1,6 +1,6 @@
 # Extension Manifest v2（草案）
 
-> Status: Draft — 仅设计，v1.1 不实现。计划随 v1.2 的 Command 扩展类型一起落地。
+> Status: Partially Implemented — `contributes.commands`（no-view Command 扩展）已在 v1.2 落地；其余贡献点（tools/skills/views 等）仍为草案。
 > 背景详见同目录 `extension-capability-model.md`。
 
 ## 目标
@@ -62,5 +62,5 @@
 
 ## 待决议
 
-- `no-view` command 的 JS 执行环境：主进程 Node-like sandbox vs Rust 内嵌 JS 引擎（如 boa/quickjs）vs 复用隐藏 WebView——v1.2 开工前需原型验证后定
+- ~~`no-view` command 的 JS 执行环境~~ **已决（v1.2）**：复用隐藏 opaque-origin iframe + postMessage 桥，与 UI 插件同一安全边界和权限管道；否决内嵌 JS 引擎（新依赖、权限体系要另接，过度设计）
 - Workflow/Skill 的 contributes 形态待 v2.0 设计时补充
