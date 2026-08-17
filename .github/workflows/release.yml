@@ -48,6 +48,8 @@ jobs:
           releaseBody: 'See the assets to download this version.'
           releaseDraft: true
           prerelease: false
+          # 仅 CI 生成 updater 产物（需签名密钥），本地 tauri build 不受影响
+          args: --config '{"bundle":{"createUpdaterArtifacts":true}}'
 
   build-windows:
     runs-on: windows-latest
@@ -86,6 +88,8 @@ jobs:
           releaseBody: 'See the assets to download this version.'
           releaseDraft: true
           prerelease: false
+          # 仅 CI 生成 updater 产物（需签名密钥），本地 tauri build 不受影响
+          args: --config '{"bundle":{"createUpdaterArtifacts":true}}'
 
   build-linux:
     runs-on: ubuntu-latest
@@ -129,3 +133,5 @@ jobs:
           releaseBody: 'See the assets to download this version.'
           releaseDraft: true
           prerelease: false
+          # 仅 CI 生成 updater 产物（需签名密钥），本地 tauri build 不受影响
+          args: --config '{"bundle":{"createUpdaterArtifacts":true}}'
