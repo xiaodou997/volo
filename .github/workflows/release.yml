@@ -6,6 +6,10 @@ on:
       - 'v*'
   workflow_dispatch:
 
+# tauri-action 需要创建 Release 并上传产物
+permissions:
+  contents: write
+
 jobs:
   build-macos:
     runs-on: macos-latest
