@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] 1.8.0
+
+### Added
+- Command 扩展新增 list mode：`contributes.commands[].mode: "list"`，命令常驻隐藏 iframe 向启动器返回可选择的结果列表
+- 插件侧新 API：`rubick.command.setList(items)` / `rubick.command.onSelect(cb)`；输入过滤重触发 onRun（宿主防抖 150ms）
+- 桥消息：`command-set-list`（插件→宿主）/ `command-select`（宿主→插件）
+- 示范：uuid-gen 新增 `uuid-list` 命令（小写/大写/无横线/批量 5 个，选中即生成复制），版本 1.2.0
+
 ## [Unreleased] 1.7.0
 
 ### Added

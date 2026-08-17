@@ -48,6 +48,8 @@ export interface CommandInfo {
   name: string;
   keywords: string[];
   description?: string;
+  /** 命令模式：run（直接执行）或 list（列表模式） */
+  mode: 'run' | 'list';
 }
 
 export interface PluginInfo {
@@ -63,11 +65,25 @@ export interface AiQueryResult {
   query: string;
 }
 
+// list 模式命令推送到启动器的列表项（本地注入，不进 Rust 搜索）
+export interface ListCommandItem {
+  id: string;
+  title: string;
+  description?: string;
+  icon?: string;
+}
+
+export interface CommandItemResult {
+  type: 'command-item';
+  item: ListCommandItem;
+}
+
 export type SearchResult =
   | { type: 'app'; name: string; path: string; icon?: string; pinyin?: string; initials?: string }
   | { type: 'plugin'; plugin: PluginInfo; feature: FeatureInfo }
   | { type: 'command'; plugin: PluginInfo; command: CommandInfo }
   | { type: 'file'; path: string; name: string; file_type: string; extension?: string }
+  | CommandItemResult
   | AiQueryResult;
 
 // ============ AI / Agent ============

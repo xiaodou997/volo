@@ -53,6 +53,14 @@ pub struct CommandSpec {
     pub run: String,
     #[serde(default)]
     pub icon: Option<String>,
+    /// 命令模式："run"（默认，直接执行）或 "list"（列表模式）
+    #[serde(default = "default_run_mode")]
+    pub mode: String,
+}
+
+/// 命令模式默认值：run
+fn default_run_mode() -> String {
+    "run".to_string()
 }
 
 /// 工具（Agent 可调用）扩展定义
@@ -327,6 +335,16 @@ fn load_plugin_from_dir(dir: &PathBuf) -> Result<Plugin> {
         plugin.main = "index.html".to_string();
     }
 
+    // 校验命令贡献点：mode 只允许 "run" 或 "list"
+    for command in &plugin.contributes.commands {
+        if command.mode != "run" && command.mode != "list" {
+            return Err(VoloError::Plugin(format!(
+                "Command '{}' mode must be \"run\" or \"list\", got \"{}\"",
+                command.id, command.mode
+            )));
+        }
+    }
+
     // 校验工具贡献点：parameters 必须是 object 类型 schema，run 必须非空
     for tool in &plugin.contributes.tools {
         if tool.id.is_empty() {
@@ -464,6 +482,61 @@ mod tests {
         assert_eq!(cmd.description.as_deref(), Some("Generate a UUID and copy it"));
         assert_eq!(cmd.run, "command.js");
         assert_eq!(cmd.icon.as_deref(), Some("icon.png"));
+        // manifest 缺省 mode 时默认为 "run"
+        assert_eq!(cmd.mode, "run");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_command_mode_list() {
+        let dir = temp_plugin_dir("command_mode_list");
+        std::fs::write(
+            dir.join("plugin.json"),
+            r#"{
+                "id": "file-explorer",
+                "name": "File Explorer",
+                "version": "1.0.0",
+                "contributes": {
+                    "commands": [
+                        {
+                            "id": "browse",
+                            "name": "Browse Files",
+                            "run": "list.js",
+                            "mode": "list"
+                        }
+                    ]
+                }
+            }"#,
+        )
+        .unwrap();
+
+        let plugin = load_plugin_from_dir(&dir).unwrap();
+        assert_eq!(plugin.contributes.commands[0].mode, "list");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_command_invalid_mode_rejected() {
+        let dir = temp_plugin_dir("command_bad_mode");
+        std::fs::write(
+            dir.join("plugin.json"),
+            r#"{
+                "id": "bad-plugin",
+                "name": "Bad Plugin",
+                "version": "1.0.0",
+                "contributes": {
+                    "commands": [
+                        { "id": "bad", "name": "Bad", "run": "cmd.js", "mode": "view" }
+                    ]
+                }
+            }"#,
+        )
+        .unwrap();
+
+        let result = load_plugin_from_dir(&dir);
+        assert!(matches!(result, Err(VoloError::Plugin(_))));
 
         std::fs::remove_dir_all(&dir).ok();
     }

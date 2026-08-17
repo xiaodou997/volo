@@ -10,10 +10,14 @@
  *                   { source: 'volo-plugin', kind: 'subInput', action, data }
  *                   { source: 'volo-plugin', kind: 'exit' }
  *                   { source: 'volo-plugin', kind: 'command-done', data: { error? } }
+ *                   { source: 'volo-plugin', kind: 'command-set-list', data: { items } }
  *                   { source: 'volo-plugin', kind: 'tool-done', ok, data | error }
  *   宿主 -> 客户端: { source: 'volo-host', kind: 'api-result', reqId, ok, data, error }
  *                   { source: 'volo-host', kind: 'event', type, data }
- *                   （type 为 'run' 时触发 rubick.command.onRun 注册的回调，data 为 { query }）
+ *                   （type 为 'run' 时触发 rubick.command.onRun 注册的回调，data 为 { query }，
+ *                    可重复触发用于 list 模式过滤；
+ *                    type 为 'command-select' 时触发 rubick.command.onSelect 注册的回调，
+ *                    data 为 { id }）
  *
  *   tool 调用由宿主 bootstrap 脚本直接调 rubick.tool.__invoke(inputJsonString)
  *   触发（不走 postMessage），结果经 'tool-done' 回传宿主。
@@ -25,6 +29,7 @@ export const PLUGIN_CLIENT_SCRIPT = `(function () {
   var pending = {};
   var subInputCallback = null;
   var commandRunCallback = null;
+  var commandSelectCallback = null;
   var toolCallback = null;
 
   function commandDone(error) {
@@ -99,6 +104,19 @@ export const PLUGIN_CLIENT_SCRIPT = `(function () {
         }
         return;
       }
+      if (msg.type === 'command-select') {
+        if (typeof commandSelectCallback === 'function') {
+          try {
+            var selectResult = commandSelectCallback(msg.data && msg.data.id);
+            if (selectResult && typeof selectResult.catch === 'function') {
+              selectResult.catch(commandDone);
+            }
+          } catch (selectError) {
+            commandDone(selectError);
+          }
+        }
+        return;
+      }
       var hook = r[msg.type];
       if (typeof hook === 'function') {
         hook(msg.data);
@@ -118,7 +136,16 @@ export const PLUGIN_CLIENT_SCRIPT = `(function () {
     // command (no-view) entry point
     command: {
       onRun: function (cb) { commandRunCallback = cb; },
+      onSelect: function (cb) { commandSelectCallback = cb; },
       done: function (error) { commandDone(error); },
+      // list mode: push items ({id, title, description?, icon?}) to the launcher result list
+      setList: function (items) {
+        window.parent.postMessage({
+          source: 'volo-plugin',
+          kind: 'command-set-list',
+          data: { items: Array.isArray(items) ? items : [] }
+        }, '*');
+      },
       // host-internal: invoke the registered callback with the query string
       __trigger: function (query) {
         if (typeof commandRunCallback !== 'function') {

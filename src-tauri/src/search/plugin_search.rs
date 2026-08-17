@@ -84,6 +84,7 @@ pub fn search_plugins(
                         name: command.name.clone(),
                         keywords: command.keywords.clone(),
                         description: command.description.clone(),
+                        mode: command.mode.clone(),
                     },
                 });
             }
@@ -127,6 +128,7 @@ mod tests {
                     description: Some("Generate a UUID".to_string()),
                     run: "command.js".to_string(),
                     icon: None,
+                    mode: "list".to_string(),
                 }],
                 tools: vec![],
             },
@@ -143,6 +145,8 @@ mod tests {
                 assert_eq!(command.id, "gen-uuid");
                 assert_eq!(command.name, "Generate UUID");
                 assert_eq!(command.description.as_deref(), Some("Generate a UUID"));
+                // mode 从 CommandSpec 透传到搜索结果
+                assert_eq!(command.mode, "list");
             }
             _ => panic!("expected command result"),
         }

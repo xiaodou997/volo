@@ -1,6 +1,6 @@
 # Extension Manifest v2（草案）
 
-> Status: Partially Implemented — `contributes.commands`（no-view Command 扩展）已在 v1.2 落地，`contributes.tools`（AI 工具，向内置 Agent 贡献 LLM function-calling 能力）已在 v1.5 落地；其余贡献点（skills/views 等）仍为草案。
+> Status: Partially Implemented — `contributes.commands`（no-view Command 扩展，v1.2；list mode v1.8）与 `contributes.tools`（AI 工具，向内置 Agent 贡献 LLM function-calling 能力，v1.5）已落地；其余贡献点（skills/views 等）仍为草案。
 > 背景详见同目录 `extension-capability-model.md`。
 
 ## 目标

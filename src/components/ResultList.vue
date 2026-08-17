@@ -59,6 +59,30 @@
         </div>
       </template>
 
+      <!-- list 模式命令推送的列表项 -->
+      <template v-else-if="result.type === 'command-item'">
+        <div class="result-icon">
+          <img
+            v-if="result.item.icon"
+            :src="result.item.icon"
+            :alt="result.item.title"
+            class="icon-image"
+          />
+          <svg v-else width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="8" y1="6" x2="21" y2="6"/>
+            <line x1="8" y1="12" x2="21" y2="12"/>
+            <line x1="8" y1="18" x2="21" y2="18"/>
+            <line x1="3" y1="6" x2="3.01" y2="6"/>
+            <line x1="3" y1="12" x2="3.01" y2="12"/>
+            <line x1="3" y1="18" x2="3.01" y2="18"/>
+          </svg>
+        </div>
+        <div class="result-content">
+          <div class="result-title">{{ result.item.title }}</div>
+          <div class="result-subtitle">{{ result.item.description || ' ' }}</div>
+        </div>
+      </template>
+
       <!-- 文件结果 -->
       <template v-else-if="result.type === 'file'">
         <div class="result-icon">
@@ -119,6 +143,9 @@ function getKey(result: SearchResult, index: number): string {
   }
   if (result.type === 'command') {
     return `command-${result.plugin.id}-${result.command.id}-${index}`;
+  }
+  if (result.type === 'command-item') {
+    return `command-item-${result.item.id}-${index}`;
   }
   if (result.type === 'ai') {
     return `ai-${result.query}`;

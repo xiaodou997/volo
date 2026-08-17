@@ -32,6 +32,8 @@ pub struct CommandInfo {
     pub name: String,
     pub keywords: Vec<String>,
     pub description: Option<String>,
+    /// 命令模式："run" 或 "list"
+    pub mode: String,
 }
 
 /// 带评分的应用信息

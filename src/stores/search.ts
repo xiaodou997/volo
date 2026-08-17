@@ -5,7 +5,7 @@
 import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
-import type { LlmConfig, SearchResult } from '../api/rubick';
+import type { LlmConfig, ListCommandItem, SearchResult } from '../api/rubick';
 
 export const useSearchStore = defineStore('search', () => {
   // 状态
@@ -84,6 +84,12 @@ export const useSearchStore = defineStore('search', () => {
     }
   }
 
+  // list 模式命令推送的结果列表（整体替换，重置选中）
+  function setListItems(items: ListCommandItem[]) {
+    results.value = items.map((item) => ({ type: 'command-item' as const, item }));
+    selectedIndex.value = 0;
+  }
+
   // 导航
   function selectNext() {
     if (selectedIndex.value < results.value.length - 1) {
@@ -115,6 +121,7 @@ export const useSearchStore = defineStore('search', () => {
     refreshLlmStatus,
     search,
     clearSearch,
+    setListItems,
     selectNext,
     selectPrev,
     selectResult,

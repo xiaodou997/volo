@@ -2,7 +2,7 @@
   "manifestVersion": 2,
   "id": "volo-uuid-gen",
   "name": "UUID 生成",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "生成 UUID 并复制到剪贴板",
   "contributes": {
     "commands": [
@@ -12,6 +12,14 @@
         "keywords": ["uuid", "guid"],
         "description": "生成 UUID v4 并复制到剪贴板",
         "run": "command.js"
+      },
+      {
+        "id": "uuid-list",
+        "name": "UUID 选项",
+        "keywords": ["uuid", "guid"],
+        "description": "选择格式后生成 UUID 并复制",
+        "mode": "list",
+        "run": "list.js"
       }
     ],
     "tools": [

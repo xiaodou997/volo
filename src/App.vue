@@ -16,7 +16,7 @@ import AgentView from './components/AgentView.vue';
 import PluginManager from './components/PluginManager.vue';
 import ApprovalDialog from './components/ApprovalDialog.vue';
 import { useSearchStore } from './stores/search';
-import { runCommand } from './bridge/commandRunner';
+import { runCommand, runListCommand, type ListCommandHandle } from './bridge/commandRunner';
 import { initToolRunner } from './bridge/toolRunner';
 import './api/rubick';
 
@@ -37,6 +37,11 @@ const pluginViewRef = ref<InstanceType<typeof PluginView> | null>(null);
 const subInputVisible = ref(false);
 const subInputPlaceholder = ref('');
 const subInputValue = ref('');
+
+// list 命令模式状态
+const listCommandMode = ref(false);
+let listHandle: ListCommandHandle | null = null;
+let listQueryTimer: ReturnType<typeof setTimeout> | null = null;
 
 // 计算窗口高度
 const windowHeight = computed(() => {
@@ -71,6 +76,17 @@ const windowHeight = computed(() => {
 
 // 处理输入
 function handleInput(value: string) {
+  // list 命令模式：输入作为过滤词，防抖 150ms 后重触发命令的 onRun(query)
+  if (listCommandMode.value) {
+    if (listQueryTimer) {
+      clearTimeout(listQueryTimer);
+    }
+    listQueryTimer = setTimeout(() => {
+      listHandle?.setQuery(value);
+    }, 150);
+    return;
+  }
+
   // 检查是否是设置命令
   if (value.toLowerCase() === 'settings' || value === '设置') {
     enterSettings();
@@ -89,7 +105,10 @@ function handleInput(value: string) {
 
 // 处理清空
 function handleClear() {
-  if (agentMode.value) {
+  if (listCommandMode.value) {
+    // 退出 list 命令模式（销毁 iframe，停留在启动器）
+    exitListCommand();
+  } else if (agentMode.value) {
     // 退出 Agent 模式（AgentView 卸载时自动 agent_cancel）
     exitAgent();
   } else if (settingsMode.value) {
@@ -112,6 +131,15 @@ function handleClear() {
     const result = searchStore.selectedResult;
     if (!result) return;
 
+    if (listCommandMode.value) {
+      // list 命令模式：回车选中某项，触发命令的 onSelect(id)；
+      // 命令执行完动作后调 command.done()，由 onDone 回调退出模式并隐藏窗口
+      if (result.type === 'command-item') {
+        listHandle?.select(result.item.id);
+      }
+      return;
+    }
+
     if (result.type === 'app') {
       // 记录使用历史
       invoke('record_app_usage', { appPath: result.path }).catch(() => {});
@@ -127,11 +155,16 @@ function handleClear() {
       // 进入插件模式
       enterPlugin(result.plugin.id, result.feature.id);
     } else if (result.type === 'command') {
-      // 后台执行无界面命令（错误由 commandRunner 通知），清空搜索并隐藏窗口
-      void runCommand(result.plugin.id, result.command.id, searchStore.query);
-      searchStore.clearSearch();
-      updateWindowSize();
-      await invoke('hide_main_window');
+      if (result.command.mode === 'list') {
+        // list 模式命令：不隐藏窗口，进入 list 命令模式
+        void enterListCommand(result.plugin.id, result.command.id);
+      } else {
+        // 后台执行无界面命令（错误由 commandRunner 通知），清空搜索并隐藏窗口
+        void runCommand(result.plugin.id, result.command.id, searchStore.query);
+        searchStore.clearSearch();
+        updateWindowSize();
+        await invoke('hide_main_window');
+      }
     } else if (result.type === 'file') {
       // 打开文件或文件夹
       await invoke('shell_open_path', { path: result.path });
@@ -169,9 +202,53 @@ function exitAgent() {
   updateWindowSize();
 }
 
+// 进入 list 命令模式：清空搜索作为过滤输入，启动隐藏 iframe 并触发 onRun('')
+async function enterListCommand(pluginId: string, commandId: string) {
+  searchStore.clearSearch();
+  listCommandMode.value = true;
+  updateWindowSize();
+
+  const handle = await runListCommand(pluginId, commandId, {
+    onList: (items) => {
+      searchStore.setListItems(items);
+    },
+    onDone: () => {
+      // 命令调 done()：销毁 iframe、退出模式并隐藏窗口（错误已由 commandRunner 通知）
+      exitListCommand();
+      void invoke('hide_main_window');
+    },
+    onError: () => {
+      // 运行单元启动失败：退出模式，停留在启动器
+      exitListCommand();
+    },
+  });
+
+  if (!handle) {
+    return; // onError 已退出模式
+  }
+  // await 期间可能已退出（Esc / 失焦），避免泄漏运行单元
+  if (!listCommandMode.value) {
+    handle.destroy();
+    return;
+  }
+  listHandle = handle;
+}
+
+// 退出 list 命令模式（destroy 幂等；onDone 路径下 iframe 已由 commandRunner 销毁）
+function exitListCommand() {
+  listCommandMode.value = false;
+  if (listQueryTimer) {
+    clearTimeout(listQueryTimer);
+    listQueryTimer = null;
+  }
+  listHandle?.destroy();
+  listHandle = null;
+  searchStore.clearSearch();
+  updateWindowSize();
+}
+
 // 进入插件模式
-function enterPlugin(pluginId: string, featureId: string) {
-  currentPlugin.value = { pluginId, featureId };
+function enterPlugin(pluginId: string, featureId: string) {  currentPlugin.value = { pluginId, featureId };
   pluginMode.value = true;
   subInputVisible.value = false;
   updateWindowSize();
@@ -287,6 +364,10 @@ onMounted(async () => {
   const unlisten = await mainWindow.onFocusChanged(({ payload }: { payload: boolean }) => {
     if (!payload && !settingsMode.value && !pluginManagerMode.value && !pluginMode.value && !agentMode.value) {
       // 失焦时隐藏（排除设置模式、插件管理模式、插件模式和 Agent 模式）
+      // list 命令模式：失焦隐藏同时销毁 iframe、退出模式
+      if (listCommandMode.value) {
+        exitListCommand();
+      }
       invoke('hide_main_window');
     }
   });

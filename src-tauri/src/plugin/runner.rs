@@ -203,6 +203,7 @@ mod tests {
                     description: None,
                     run: run.to_string(),
                     icon: None,
+                    mode: "run".to_string(),
                 }],
                 tools: vec![],
             },
