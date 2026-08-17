@@ -127,12 +127,14 @@ pub trait ChatBackend: Send + Sync {
     ) -> Pin<Box<dyn Future<Output = Result<ChatResponse>> + Send + 'a>>;
 
     /// 流式聊天：content 增量通过 on_delta 实时回调，返回完整 ChatResponse。
+    /// on_delta 返回 false 表示调用方要求中断（如用户取消），实现应尽快停止
+    /// 读取流并返回；此时返回的 ChatResponse 是中断前已累积的部分内容。
     /// 默认实现回退为非流式：chat() 完成后一次性回调全部 content。
     fn chat_stream<'a>(
         &'a self,
         messages: &'a [Message],
         tools: &'a [ToolSpec],
-        on_delta: &'a mut (dyn FnMut(String) + Send),
+        on_delta: &'a mut (dyn FnMut(String) -> bool + Send),
     ) -> Pin<Box<dyn Future<Output = Result<ChatResponse>> + Send + 'a>> {
         Box::pin(async move {
             let resp = self.chat(messages, tools).await?;
@@ -415,7 +417,7 @@ impl ChatBackend for OpenAiBackend {
         &'a self,
         messages: &'a [Message],
         tools: &'a [ToolSpec],
-        on_delta: &'a mut (dyn FnMut(String) + Send),
+        on_delta: &'a mut (dyn FnMut(String) -> bool + Send),
     ) -> Pin<Box<dyn Future<Output = Result<ChatResponse>> + Send + 'a>> {
         use futures_util::StreamExt;
 
@@ -425,12 +427,15 @@ impl ChatBackend for OpenAiBackend {
 
             let mut acc = SseAccumulator::new();
             let mut stream = resp.bytes_stream();
-            while let Some(chunk) = stream.next().await {
+            // on_delta 返回 false（如用户取消）则停止读取，返回已累积的部分内容
+            'outer: while let Some(chunk) = stream.next().await {
                 let bytes = chunk
                     .map_err(|e| VoloError::Other(format!("LLM stream read failed: {}", e)))?;
                 let text = String::from_utf8_lossy(&bytes);
                 for delta in acc.feed(&text) {
-                    on_delta(delta);
+                    if !on_delta(delta) {
+                        break 'outer;
+                    }
                 }
             }
 
@@ -587,7 +592,10 @@ mod tests {
         let backend = EchoBackend;
         let mut deltas = Vec::new();
         let resp = backend
-            .chat_stream(&[], &[], &mut |d| deltas.push(d))
+            .chat_stream(&[], &[], &mut |d| {
+                deltas.push(d);
+                true
+            })
             .await
             .unwrap();
         assert_eq!(deltas, vec!["完整回答"]);

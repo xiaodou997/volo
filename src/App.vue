@@ -30,6 +30,8 @@ const settingsMode = ref(false);
 const pluginManagerMode = ref(false);
 const agentMode = ref(false);
 const agentQuery = ref('');
+// AgentView 打开方式：chat（带 query 直接发问）/ history（直达会话历史列表）
+const agentInitialMode = ref<'chat' | 'history'>('chat');
 const currentPlugin = ref<{ pluginId: string; featureId: string } | null>(null);
 const pluginViewRef = ref<InstanceType<typeof PluginView> | null>(null);
 
@@ -180,6 +182,9 @@ function handleClear() {
       } else {
         enterAgent(result.query);
       }
+    } else if (result.type === 'ai-history') {
+      // 空输入入口：直达 AI 会话历史（可回放、继续对话）
+      enterAgentHistory();
     }
   }
 
@@ -191,6 +196,15 @@ async function enterAgent(query: string) {
     console.warn('agent_new_session 失败，继续进入 Agent 模式', e);
   }
   agentQuery.value = query;
+  agentInitialMode.value = 'chat';
+  agentMode.value = true;
+  updateWindowSize();
+}
+
+// 直达 AI 会话历史（空输入入口；不动当前会话状态）
+function enterAgentHistory() {
+  agentQuery.value = '';
+  agentInitialMode.value = 'history';
   agentMode.value = true;
   updateWindowSize();
 }
@@ -199,6 +213,7 @@ async function enterAgent(query: string) {
 function exitAgent() {
   agentMode.value = false;
   agentQuery.value = '';
+  agentInitialMode.value = 'chat';
   updateWindowSize();
 }
 
@@ -388,7 +403,7 @@ onMounted(async () => {
 
     <!-- Agent 模式 -->
     <template v-else-if="agentMode">
-      <AgentView :query="agentQuery" @exit="exitAgent" />
+      <AgentView :query="agentQuery" :initial-mode="agentInitialMode" @exit="exitAgent" />
     </template>
 
     <!-- 插件管理模式 -->

@@ -143,12 +143,14 @@ pub async fn run_agent_loop(
             return;
         }
 
-        // 流式请求：content 增量实时 emit，本轮是否有增量决定结尾是否补发完整消息
+        // 流式请求：content 增量实时 emit，本轮是否有增量决定结尾是否补发完整消息；
+        // 回调返回 false（取消标志置位）→ 后端中断流，返回中断前的部分内容
         let mut streamed = false;
         let response = match backend
             .chat_stream(messages, tools, &mut |delta| {
                 streamed = true;
                 emit(AgentEvent::delta_message(delta));
+                !cancel.load(Ordering::Relaxed)
             })
             .await
         {
@@ -161,6 +163,14 @@ pub async fn run_agent_loop(
                 return;
             }
         };
+
+        // 流式输出中途被取消：已输出的部分内容留在前端气泡，
+        // 不补发完整消息、部分回答也不入历史（残句会污染后续上下文）
+        if cancel.load(Ordering::Relaxed) {
+            log_event("done", json!({ "reason": "cancelled" }));
+            emit(AgentEvent::simple(AgentEventKind::Done));
+            return;
+        }
 
         log_event(
             "model_response",
@@ -698,11 +708,14 @@ mod tests {
             &'a self,
             messages: &'a [Message],
             tools: &'a [ToolSpec],
-            on_delta: &'a mut (dyn FnMut(String) + Send),
+            on_delta: &'a mut (dyn FnMut(String) -> bool + Send),
         ) -> Pin<Box<dyn Future<Output = Result<ChatResponse>> + Send + 'a>> {
             Box::pin(async move {
+                // 尊重回调的中断信号：返回 false 即停止发送后续 delta
                 for delta in &self.deltas {
-                    on_delta(delta.clone());
+                    if !on_delta(delta.clone()) {
+                        break;
+                    }
                 }
                 self.chat(messages, tools).await
             })
@@ -849,6 +862,56 @@ mod tests {
         assert_eq!(second_turn[3].content.as_deref(), Some("你好"));
         assert_eq!(second_turn[4].content.as_deref(), Some("剪贴板里是：你好"));
         assert_eq!(second_turn[5].content.as_deref(), Some("再说一遍"));
+    }
+
+    /// 流式中途取消：第一个 delta 到达时置位取消标志 → 流中断，直接 done(cancelled)，
+    /// 不补发完整消息、部分回答不入历史
+    #[tokio::test]
+    async fn test_loop_cancel_mid_stream() {
+        let backend = StreamBackend {
+            deltas: vec!["你".to_string(), "好".to_string(), "！".to_string()],
+        };
+        let executor = MockExecutor::ok(json!("x"));
+        let cancel = AtomicBool::new(false);
+
+        let mut events = Vec::new();
+        let mut messages = start_messages("打个招呼");
+        let mut log_entries: Vec<(String, Value)> = Vec::new();
+        {
+            let mut log_cb = |kind: &str, payload: &Value| {
+                log_entries.push((kind.to_string(), payload.clone()));
+            };
+            run_agent_loop(
+                &backend,
+                &executor,
+                &mut messages,
+                &ToolRegistry::specs(),
+                |e| {
+                    // 模拟用户在收到第一个增量时点击停止
+                    if e.delta == Some(true) {
+                        cancel.store(true, Ordering::Relaxed);
+                    }
+                    events.push(e);
+                },
+                &cancel,
+                Some(&mut log_cb),
+            )
+            .await;
+        }
+
+        // 只收到第一个 delta，随后直接 done；没有完整 message、没有 error
+        assert_eq!(
+            kinds(&events),
+            vec![AgentEventKind::Message, AgentEventKind::Done]
+        );
+        assert_eq!(events[0].content.as_deref(), Some("你"));
+        assert_eq!(events[0].delta, Some(true));
+
+        // 日志收尾为 cancelled；部分回答未入历史（仍只有 system + user）
+        let last = log_entries.last().unwrap();
+        assert_eq!(last.0, "done");
+        assert_eq!(last.1["reason"], "cancelled");
+        assert_eq!(messages.len(), 2);
     }
 
     /// model_response 日志完整记录 content（不截断），tool_result 仍截断

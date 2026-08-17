@@ -15,6 +15,12 @@
       <h2 class="title">{{ headerTitle }}</h2>
       <span v-if="viewMode === 'chat' && !finished" class="running-dot"></span>
       <div class="header-actions">
+        <button
+          v-if="viewMode === 'chat' && !finished"
+          class="header-btn stop-btn"
+          :disabled="stopping"
+          @click="stopSession"
+        >{{ stopping ? '停止中…' : '停止' }}</button>
         <button v-if="viewMode === 'chat'" class="header-btn" @click="openHistory">历史</button>
         <button class="header-btn" @click="newSession">新对话</button>
       </div>
@@ -119,6 +125,8 @@ function renderMarkdown(text: string): string {
 
 const props = defineProps<{
   query: string;
+  // 打开方式：chat（默认，带上 query 立即发问）/ history（直达历史列表，不发问）
+  initialMode?: 'chat' | 'history';
 }>();
 
 const emit = defineEmits<{
@@ -148,6 +156,8 @@ const sessions = ref<SessionMeta[]>([]);
 const sessionsLoading = ref(false);
 const sessionsError = ref('');
 const followUp = ref('');
+// 停止按钮状态（等待后端 done 事件落地）
+const stopping = ref(false);
 // 从回放继续会话：当前回放的会话 id / 是否已恢复为实时会话 / 恢复中与错误状态
 const currentSessionId = ref<string | null>(null);
 const resumed = ref(false);
@@ -171,12 +181,17 @@ function formatTime(iso: string): string {
   return isNaN(d.getTime()) ? iso : d.toLocaleString();
 }
 
-// 返回键：回放 → 历史列表 → 实时会话 → 退出
+// 返回键：回放 → 历史列表 → 实时会话 → 退出；
+// 历史直达入口（initialMode=history）没有实时会话可回，从历史列表直接退出
 function onBack() {
   if (viewMode.value === 'replay') {
     viewMode.value = 'history';
   } else if (viewMode.value === 'history') {
-    viewMode.value = 'chat';
+    if (props.initialMode === 'history') {
+      emit('exit');
+    } else {
+      viewMode.value = 'chat';
+    }
   } else {
     emit('exit');
   }
@@ -261,6 +276,19 @@ async function newSession() {
   emit('exit');
 }
 
+// 停止当前会话：置位取消标志，流式输出随下一个增量中断；
+// 完成后端会 emit done，handleEvent 把 finished 置 true
+async function stopSession() {
+  if (stopping.value) return;
+  stopping.value = true;
+  try {
+    await invoke('agent_cancel');
+  } catch (e) {
+    console.warn('agent_cancel 失败', e);
+    stopping.value = false;
+  }
+}
+
 // 多轮追问：本地先压入 user 气泡，再发起新一轮 agent_ask
 async function sendFollowUp() {
   const q = followUp.value.trim();
@@ -330,9 +358,11 @@ async function handleEvent(event: AgentEvent) {
     case 'error':
       timeline.value.push({ kind: 'error', text: event.content ?? '未知错误' });
       finished.value = true;
+      stopping.value = false;
       break;
     case 'done':
       finished.value = true;
+      stopping.value = false;
       break;
   }
   await scrollToBottom();
@@ -345,6 +375,13 @@ onMounted(async () => {
   unlisten = await listen<AgentEvent>('agent-event', (event) => {
     void handleEvent(event.payload);
   });
+  // 历史直达：不发起会话，直接打开历史列表（之后可从回放恢复续聊）
+  if (props.initialMode === 'history') {
+    loading.value = false;
+    finished.value = true;
+    await openHistory();
+    return;
+  }
   try {
     await invoke('agent_ask', { query: props.query });
   } catch (e) {
@@ -581,6 +618,11 @@ onUnmounted(() => {
 .header-btn:hover {
   background: var(--hover-bg);
   color: var(--text-primary);
+}
+
+/* 停止按钮：hover 用警示色提示中断语义 */
+.stop-btn:hover {
+  color: var(--danger-color);
 }
 
 /* 追问/回放中的用户气泡在时间线内，去掉分隔线与额外内边距 */

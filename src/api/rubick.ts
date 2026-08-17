@@ -83,6 +83,7 @@ export type SearchResult =
   | { type: 'plugin'; plugin: PluginInfo; feature: FeatureInfo }
   | { type: 'command'; plugin: PluginInfo; command: CommandInfo }
   | { type: 'file'; path: string; name: string; file_type: string; extension?: string }
+  | { type: 'ai-history' } // 空输入时的 AI 会话历史直达入口（本地追加，不进 Rust 搜索）
   | CommandItemResult
   | AiQueryResult;
 

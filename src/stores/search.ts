@@ -41,7 +41,8 @@ export const useSearchStore = defineStore('search', () => {
   // 搜索方法
   async function doSearch(q: string) {
     if (!q.trim()) {
-      results.value = [];
+      // 空输入：给"AI 会话历史"直达入口（本地日志，不依赖 LLM 配置）
+      results.value = [{ type: 'ai-history' }];
       selectedIndex.value = 0;
       return;
     }

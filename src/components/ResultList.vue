@@ -99,6 +99,19 @@
           <div class="result-subtitle">{{ result.file_type === 'directory' ? '文件夹' : result.extension || '文件' }}</div>
         </div>
       </template>
+      <!-- AI 会话历史入口（空输入时展示） -->
+      <template v-else-if="result.type === 'ai-history'">
+        <div class="result-icon">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="9"/>
+            <path d="M12 7v5l3 3"/>
+          </svg>
+        </div>
+        <div class="result-content">
+          <div class="result-title">AI 会话历史</div>
+          <div class="result-subtitle">查看与继续之前的对话</div>
+        </div>
+      </template>
       <!-- AI 查询结果 -->
       <template v-else-if="result.type === 'ai'">
         <div class="result-icon">
@@ -149,6 +162,9 @@ function getKey(result: SearchResult, index: number): string {
   }
   if (result.type === 'ai') {
     return `ai-${result.query}`;
+  }
+  if (result.type === 'ai-history') {
+    return 'ai-history';
   }
   return `file-${result.path}-${index}`;
 }
