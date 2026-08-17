@@ -1,6 +1,6 @@
 [package]
 name = "volo"
-version = "1.4.0"
+version = "1.8.0"
 description = "Volo - 桌面效率工具箱"
 authors = ["luoxiaodou"]
 edition = "2021"
