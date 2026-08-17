@@ -1,5 +1,7 @@
 # Volo
 
+<p><img src="assets/logo-1024.png" width="128" alt="Volo logo"></p>
+
 桌面效率启动器（Tauri 2 + Rust + Vue 3）：应用/文件搜索、可扩展插件系统、内置 AI 助手。
 
 ## 功能
