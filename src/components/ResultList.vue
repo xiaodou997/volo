@@ -81,6 +81,8 @@
           <div class="result-title">{{ result.item.title }}</div>
           <div class="result-subtitle">{{ result.item.description || ' ' }}</div>
         </div>
+        <!-- 有二级动作的项提示 Tab 展开 -->
+        <div v-if="result.item.actions && result.item.actions.length" class="result-hint">Tab ›</div>
       </template>
 
       <!-- 文件结果 -->
@@ -277,5 +279,16 @@ watch(
   font-size: 12px;
   color: var(--text-tertiary);
   margin-top: 2px;
+}
+
+/* 二级动作提示（Tab 展开） */
+.result-hint {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  background: var(--bg-secondary);
+  border-radius: 4px;
+  padding: 2px 6px;
+  margin-left: 8px;
 }
 </style>

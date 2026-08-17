@@ -45,6 +45,9 @@ const emit = defineEmits<{
   (e: 'selectNext'): void;
   (e: 'selectPrev'): void;
   (e: 'confirm'): void;
+  // list 模式二级动作面板：Tab/→ 展开，← 收起
+  (e: 'openActions'): void;
+  (e: 'closeActions'): void;
 }>();
 
 const inputRef = ref<HTMLInputElement>();
@@ -72,6 +75,16 @@ function onKeydown(e: KeyboardEvent) {
     case 'ArrowUp':
       e.preventDefault();
       emit('selectPrev');
+      break;
+    case 'ArrowRight':
+    case 'Tab':
+      // Tab 默认会移走焦点，统一拦截由上层决定是否展开动作面板
+      e.preventDefault();
+      emit('openActions');
+      break;
+    case 'ArrowLeft':
+      e.preventDefault();
+      emit('closeActions');
       break;
     case 'Enter':
       e.preventDefault();

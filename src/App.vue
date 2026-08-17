@@ -16,7 +16,7 @@ import AgentView from './components/AgentView.vue';
 import PluginManager from './components/PluginManager.vue';
 import ApprovalDialog from './components/ApprovalDialog.vue';
 import { useSearchStore } from './stores/search';
-import { runCommand, runListCommand, type ListCommandHandle } from './bridge/commandRunner';
+import { runCommand, runListCommand, type ListCommandHandle, type ListCommandItem } from './bridge/commandRunner';
 import { initToolRunner } from './bridge/toolRunner';
 import './api/rubick';
 
@@ -44,6 +44,8 @@ const subInputValue = ref('');
 const listCommandMode = ref(false);
 let listHandle: ListCommandHandle | null = null;
 let listQueryTimer: ReturnType<typeof setTimeout> | null = null;
+// 二级动作面板：非空表示正展示该列表项的动作列表
+const actionPanelItem = ref<ListCommandItem | null>(null);
 
 // 计算窗口高度
 const windowHeight = computed(() => {
@@ -80,6 +82,10 @@ const windowHeight = computed(() => {
 function handleInput(value: string) {
   // list 命令模式：输入作为过滤词，防抖 150ms 后重触发命令的 onRun(query)
   if (listCommandMode.value) {
+    // 面板打开时继续输入：先收回面板（随后的 setQuery 会恢复并过滤列表）
+    if (actionPanelItem.value) {
+      actionPanelItem.value = null;
+    }
     if (listQueryTimer) {
       clearTimeout(listQueryTimer);
     }
@@ -108,6 +114,11 @@ function handleInput(value: string) {
 // 处理清空
 function handleClear() {
   if (listCommandMode.value) {
+    // 动作面板打开时 Esc 只收起面板，不退出 list 模式
+    if (actionPanelItem.value) {
+      closeActionPanel();
+      return;
+    }
     // 退出 list 命令模式（销毁 iframe，停留在启动器）
     exitListCommand();
   } else if (agentMode.value) {
@@ -137,7 +148,12 @@ function handleClear() {
       // list 命令模式：回车选中某项，触发命令的 onSelect(id)；
       // 命令执行完动作后调 command.done()，由 onDone 回调退出模式并隐藏窗口
       if (result.type === 'command-item') {
-        listHandle?.select(result.item.id);
+        // 动作面板打开中：选中的是动作，触发 onAction(itemId, actionId)
+        if (actionPanelItem.value) {
+          listHandle?.action(actionPanelItem.value.id, result.item.id);
+        } else {
+          listHandle?.select(result.item.id);
+        }
       }
       return;
     }
@@ -217,6 +233,26 @@ function exitAgent() {
   updateWindowSize();
 }
 
+// 打开选中项的二级动作面板（仅 list 模式、该项声明了 actions 时生效）
+function openActionPanel() {
+  if (!listCommandMode.value || actionPanelItem.value) return;
+  const result = searchStore.selectedResult;
+  if (!result || result.type !== 'command-item') return;
+  const actions = result.item.actions;
+  if (!actions || actions.length === 0) return;
+  actionPanelItem.value = result.item;
+  // 动作复用 command-item 渲染（actionId 装在 item.id 里，确认时取回）
+  searchStore.setListItems(actions.map((a) => ({ ...a })));
+  updateWindowSize();
+}
+
+// 收起动作面板：重触发 onRun 让插件恢复并过滤原列表
+function closeActionPanel() {
+  if (!actionPanelItem.value) return;
+  actionPanelItem.value = null;
+  listHandle?.setQuery(searchStore.query);
+}
+
 // 进入 list 命令模式：清空搜索作为过滤输入，启动隐藏 iframe 并触发 onRun('')
 async function enterListCommand(pluginId: string, commandId: string) {
   searchStore.clearSearch();
@@ -225,7 +261,10 @@ async function enterListCommand(pluginId: string, commandId: string) {
 
   const handle = await runListCommand(pluginId, commandId, {
     onList: (items) => {
-      searchStore.setListItems(items);
+      // 动作面板打开期间忽略列表推送，避免动作项被覆盖
+      if (!actionPanelItem.value) {
+        searchStore.setListItems(items);
+      }
     },
     onDone: () => {
       // 命令调 done()：销毁 iframe、退出模式并隐藏窗口（错误已由 commandRunner 通知）
@@ -252,6 +291,7 @@ async function enterListCommand(pluginId: string, commandId: string) {
 // 退出 list 命令模式（destroy 幂等；onDone 路径下 iframe 已由 commandRunner 销毁）
 function exitListCommand() {
   listCommandMode.value = false;
+  actionPanelItem.value = null;
   if (listQueryTimer) {
     clearTimeout(listQueryTimer);
     listQueryTimer = null;
@@ -421,6 +461,8 @@ onMounted(async () => {
         @select-next="searchStore.selectNext"
         @select-prev="searchStore.selectPrev"
         @confirm="handleConfirm"
+        @open-actions="openActionPanel"
+        @close-actions="closeActionPanel"
       />
 
       <ResultList

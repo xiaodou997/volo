@@ -71,6 +71,16 @@ export interface ListCommandItem {
   title: string;
   description?: string;
   icon?: string;
+  // 二级动作面板：选中项上按 Tab/→ 展开的可选动作；选中动作触发插件 onAction(itemId, actionId)
+  actions?: ListCommandAction[];
+}
+
+// 列表项的二级动作
+export interface ListCommandAction {
+  id: string;
+  title: string;
+  description?: string;
+  icon?: string;
 }
 
 export interface CommandItemResult {

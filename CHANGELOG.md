@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 从回放继续会话：每轮结束向会话日志落消息级历史快照（`history` 事件），回放页"继续对话"恢复完整上下文（含 tool 调用细节）后续聊；旧日志无快照时退化为问答对重建
 - Agent 会话停止按钮：流式输出中途可中断（取消标志下沉到 SSE 读取循环，已输出内容保留，残句不入历史）
 - 启动器空输入直达入口：搜索框为空时显示"AI 会话历史"，回车直接打开历史列表（可回放、继续对话），无需先发问
+- List mode 二级动作面板：列表项可声明 `actions`（`[{id, title, description?, icon?}]`），Tab/→ 展开动作面板、←/Esc 收起（重触发 onRun 恢复列表）、Enter 仍是 onSelect 默认动作；插件侧新增 `rubick.command.onAction(cb)`（回传 itemId + actionId）；uuid-gen 1.3.0 示范接入
 
 ### Fixed
 - 修复设置页"关于与更新"区块使用字母 V 占位而非真实 logo 的问题

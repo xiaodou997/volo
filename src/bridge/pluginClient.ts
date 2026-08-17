@@ -17,7 +17,9 @@
  *                   （type 为 'run' 时触发 rubick.command.onRun 注册的回调，data 为 { query }，
  *                    可重复触发用于 list 模式过滤；
  *                    type 为 'command-select' 时触发 rubick.command.onSelect 注册的回调，
- *                    data 为 { id }）
+ *                    data 为 { id }；
+ *                    type 为 'command-action' 时触发 rubick.command.onAction 注册的回调，
+ *                    data 为 { id, actionId }，来自列表项的二级动作面板）
  *
  *   tool 调用由宿主 bootstrap 脚本直接调 rubick.tool.__invoke(inputJsonString)
  *   触发（不走 postMessage），结果经 'tool-done' 回传宿主。
@@ -30,6 +32,7 @@ export const PLUGIN_CLIENT_SCRIPT = `(function () {
   var subInputCallback = null;
   var commandRunCallback = null;
   var commandSelectCallback = null;
+  var commandActionCallback = null;
   var toolCallback = null;
 
   function commandDone(error) {
@@ -117,6 +120,22 @@ export const PLUGIN_CLIENT_SCRIPT = `(function () {
         }
         return;
       }
+      if (msg.type === 'command-action') {
+        if (typeof commandActionCallback === 'function') {
+          try {
+            var actionResult = commandActionCallback(
+              msg.data && msg.data.id,
+              msg.data && msg.data.actionId
+            );
+            if (actionResult && typeof actionResult.catch === 'function') {
+              actionResult.catch(commandDone);
+            }
+          } catch (actionError) {
+            commandDone(actionError);
+          }
+        }
+        return;
+      }
       var hook = r[msg.type];
       if (typeof hook === 'function') {
         hook(msg.data);
@@ -137,8 +156,12 @@ export const PLUGIN_CLIENT_SCRIPT = `(function () {
     command: {
       onRun: function (cb) { commandRunCallback = cb; },
       onSelect: function (cb) { commandSelectCallback = cb; },
+      // list mode: secondary action panel callback, receives (itemId, actionId)
+      onAction: function (cb) { commandActionCallback = cb; },
       done: function (error) { commandDone(error); },
-      // list mode: push items ({id, title, description?, icon?}) to the launcher result list
+      // list mode: push items ({id, title, description?, icon?, actions?}) to the
+      // launcher result list; item.actions = [{id, title, description?, icon?}]
+      // opens a secondary action panel on Tab / ArrowRight
       setList: function (items) {
         window.parent.postMessage({
           source: 'volo-plugin',

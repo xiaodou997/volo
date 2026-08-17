@@ -111,6 +111,16 @@ export interface ListCommandItem {
   title: string;
   description?: string;
   icon?: string;
+  /** 二级动作面板：Tab/→ 展开；选中动作经 command-action 事件回传 { id, actionId } */
+  actions?: ListCommandAction[];
+}
+
+/** 列表项的二级动作 */
+export interface ListCommandAction {
+  id: string;
+  title: string;
+  description?: string;
+  icon?: string;
 }
 
 export interface ListCommandCallbacks {
@@ -127,6 +137,8 @@ export interface ListCommandHandle {
   setQuery: (query: string) => void;
   /** 回车选中某项：触发命令的 onSelect(id) */
   select: (id: string) => void;
+  /** 二级动作面板选中动作：触发命令的 onAction(id, actionId) */
+  action: (id: string, actionId: string) => void;
   /** 销毁运行单元（幂等） */
   destroy: () => void;
 }
@@ -202,6 +214,7 @@ export async function runListCommand(
   return {
     setQuery: (query) => host.sendEvent('run', { query }),
     select: (id) => host.sendEvent('command-select', { id }),
+    action: (id, actionId) => host.sendEvent('command-action', { id, actionId }),
     destroy,
   };
 }
