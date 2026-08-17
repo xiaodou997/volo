@@ -24,7 +24,7 @@ use crate::plugin::manager::PluginState;
 /// 最大对话轮数，防止失控循环
 pub const MAX_ROUNDS: usize = 8;
 
-const SYSTEM_PROMPT: &str = "你是 Volo 启动器的内置助手，\
+pub(crate) const SYSTEM_PROMPT: &str = "你是 Volo 启动器的内置助手，\
 可以调用工具帮用户完成任务：内置工具有 clipboard_read 读取剪贴板、\
 fs_read 读取文本文件、notification_show 发送系统通知；\
 此外还有插件贡献的工具（名字形如 plugin__tool），以请求中携带的 tools 列表为准。\
@@ -300,6 +300,17 @@ impl AgentManager {
         *self.history.lock().unwrap() = messages;
         self.busy.store(false, Ordering::SeqCst);
     }
+
+    /// 载入外源历史（从回放继续会话）：busy 则报错；
+    /// 否则整体替换历史并复位取消标志。历史含 system 时 begin_turn 不会重复压入
+    pub fn load_history(&self, messages: Vec<Message>) -> Result<()> {
+        if self.busy.load(Ordering::SeqCst) {
+            return Err(VoloError::Other("上一个会话还在进行中".to_string()));
+        }
+        self.cancel.store(false, Ordering::Relaxed);
+        *self.history.lock().unwrap() = messages;
+        Ok(())
+    }
 }
 
 impl Default for AgentManager {
@@ -382,6 +393,10 @@ pub fn agent_ask(
             run_agent_loop(&backend, &executor, &mut messages, &tools, emit, &cancel, None).await;
         }
         // 任务结束（正常/取消/出错所有路径都会走到这里）：回写历史并解除 busy
+        // 落一帧消息级历史快照，供"从回放继续会话"完整恢复上下文
+        if let Some(log) = session_log.as_mut() {
+            let _ = log.log("history", &json!({ "messages": &messages }));
+        }
         finish_handle.state::<AgentManager>().finish_turn(messages);
     });
 
@@ -392,6 +407,18 @@ pub fn agent_ask(
 #[tauri::command]
 pub fn agent_new_session(manager: State<'_, AgentManager>) {
     manager.new_session();
+}
+
+/// 从会话日志恢复历史，继续该会话（回放页"继续对话"入口）。
+/// 仅载入历史，不发起请求；前端随后用 agent_ask 追问
+#[tauri::command]
+pub fn agent_resume_session(
+    app: AppHandle,
+    manager: State<'_, AgentManager>,
+    session_id: String,
+) -> Result<()> {
+    let messages = super::session::rebuild_history(&sessions_dir(&app)?, &session_id)?;
+    manager.load_history(messages)
 }
 
 /// 取消当前 Agent 会话（下一轮循环前生效）
@@ -892,6 +919,35 @@ mod tests {
         let messages = manager.begin_turn("新会话").unwrap();
         assert_eq!(messages.len(), 2);
         assert_eq!(messages[0].role, "system");
+        manager.finish_turn(messages);
+    }
+
+    /// load_history：busy 时拒绝；载入后 begin_turn 在已有历史上续接且不重复压 system
+    #[test]
+    fn test_load_history_busy_guard_and_continue() {
+        let manager = AgentManager::new();
+
+        // busy 中拒绝载入
+        let inflight = manager.begin_turn("进行中").unwrap();
+        let restored = vec![
+            Message::system(SYSTEM_PROMPT),
+            Message::user("旧问题"),
+            Message::assistant(Some("旧回答".to_string()), vec![]),
+        ];
+        assert!(manager.load_history(restored.clone()).is_err());
+        manager.finish_turn(inflight);
+
+        // 空闲时载入成功，取消标志复位
+        manager.cancel_flag().store(true, Ordering::Relaxed);
+        manager.load_history(restored).unwrap();
+        assert!(!manager.cancel_flag().load(Ordering::Relaxed));
+
+        // 续聊：历史含 system，begin_turn 只压新 user
+        let messages = manager.begin_turn("追问").unwrap();
+        assert_eq!(messages.len(), 4);
+        assert_eq!(messages[0].role, "system");
+        assert_eq!(messages[2].content.as_deref(), Some("旧回答"));
+        assert_eq!(messages[3].content.as_deref(), Some("追问"));
         manager.finish_turn(messages);
     }
 }

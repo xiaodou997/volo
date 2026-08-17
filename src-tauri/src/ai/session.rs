@@ -14,6 +14,9 @@ use tauri_plugin_opener::OpenerExt;
 
 use crate::error::{Result, VoloError};
 
+use super::agent::SYSTEM_PROMPT;
+use super::llm::Message;
+
 /// 旧日志保留天数
 pub const SESSION_RETENTION_DAYS: u64 = 30;
 
@@ -208,9 +211,8 @@ fn first_user_query(path: &Path) -> String {
     String::new()
 }
 
-/// 逐行解析 JSONL 映射回放事件；坏行跳过不报错
-fn read_session(dir: &Path, session_id: &str) -> Result<Vec<ReplayEvent>> {
-    // 防目录穿越：session_id 只允许 [a-zA-Z0-9-]
+/// 校验 session_id（防目录穿越：只允许 [a-zA-Z0-9-]）
+fn validate_session_id(session_id: &str) -> Result<()> {
     if session_id.is_empty()
         || !session_id
             .chars()
@@ -218,7 +220,20 @@ fn read_session(dir: &Path, session_id: &str) -> Result<Vec<ReplayEvent>> {
     {
         return Err(VoloError::Other(format!("非法的 session_id: {}", session_id)));
     }
-    let content = fs::read_to_string(dir.join(format!("{}.jsonl", session_id)))?;
+    Ok(())
+}
+
+/// 读取会话日志原文（先校验 id）
+fn read_session_content(dir: &Path, session_id: &str) -> Result<String> {
+    validate_session_id(session_id)?;
+    Ok(fs::read_to_string(
+        dir.join(format!("{}.jsonl", session_id)),
+    )?)
+}
+
+/// 逐行解析 JSONL 映射回放事件；坏行跳过不报错
+fn read_session(dir: &Path, session_id: &str) -> Result<Vec<ReplayEvent>> {
+    let content = read_session_content(dir, session_id)?;
 
     let mut events = Vec::new();
     for line in content.lines() {
@@ -262,6 +277,52 @@ fn read_session(dir: &Path, session_id: &str) -> Result<Vec<ReplayEvent>> {
         }
     }
     Ok(events)
+}
+
+/// 从会话日志重建对话历史（"从回放继续会话"用）。
+/// 优先取最后一条 `history` 事件的消息级快照（v1.9+ 每轮结束落盘，含 tool 调用细节）；
+/// 旧日志没有快照时退化为 user_input / model_response 问答对重建（丢失工具细节）。
+pub fn rebuild_history(dir: &Path, session_id: &str) -> Result<Vec<Message>> {
+    let content = read_session_content(dir, session_id)?;
+
+    // 最后一帧 history 快照即最完整的对话历史
+    let mut snapshot: Option<Vec<Message>> = None;
+    for line in content.lines() {
+        let Ok(v) = serde_json::from_str::<Value>(line) else { continue };
+        if v["kind"] == "history" {
+            if let Ok(messages) =
+                serde_json::from_value::<Vec<Message>>(v["payload"]["messages"].clone())
+            {
+                snapshot = Some(messages);
+            }
+        }
+    }
+    if let Some(messages) = snapshot {
+        return Ok(messages);
+    }
+
+    // 旧格式退化重建：system + 问答对（纯 tool_call 轮不产生 assistant 文本，跳过）
+    let mut messages = vec![Message::system(SYSTEM_PROMPT)];
+    for line in content.lines() {
+        let Ok(v) = serde_json::from_str::<Value>(line) else { continue };
+        let payload = &v["payload"];
+        match v["kind"].as_str().unwrap_or("") {
+            "user_input" => {
+                if let Some(query) = payload["query"].as_str() {
+                    messages.push(Message::user(query));
+                }
+            }
+            "model_response" => {
+                if let Some(content) = payload["content"].as_str() {
+                    if !content.is_empty() {
+                        messages.push(Message::assistant(Some(content.to_string()), vec![]));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(messages)
 }
 
 #[cfg(test)]
@@ -440,6 +501,96 @@ mod tests {
         }
         // 合法 id 但文件不存在 → io 错误
         assert!(read_session(&dir, "20260816-121651-notexist").is_err());
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /// history 快照：取最后一帧，完整恢复含 tool 消息的对话历史
+    #[test]
+    fn test_rebuild_history_prefers_latest_snapshot() {
+        let dir = temp_sessions_dir("rebuild-snapshot");
+        let id = "20260817-100000-snap0001";
+        let turn1 = vec![Message::system("sys"), Message::user("第一问")];
+        let turn2 = vec![
+            Message::system("sys"),
+            Message::user("第一问"),
+            Message::assistant(Some("第一答".to_string()), vec![]),
+            Message::user("第二问"),
+            Message::assistant(
+                None,
+                vec![super::super::llm::ToolCall {
+                    id: "call_1".to_string(),
+                    name: "fs_read".to_string(),
+                    arguments: json!({"path": "/tmp/a"}),
+                }],
+            ),
+            Message::tool_result("call_1".to_string(), "文件内容".to_string()),
+        ];
+        write_fixture(
+            &dir,
+            id,
+            &[
+                user_input("第一问"),
+                json!({"kind": "history", "payload": {"messages": turn1}}),
+                user_input("第二问"),
+                json!({"kind": "history", "payload": {"messages": turn2}}),
+            ],
+        );
+
+        let messages = rebuild_history(&dir, id).unwrap();
+        assert_eq!(messages.len(), 6);
+        assert_eq!(messages[0].role, "system");
+        assert_eq!(messages[3].content.as_deref(), Some("第二问"));
+        assert_eq!(messages[4].role, "assistant");
+        assert_eq!(
+            messages[4].tool_calls.as_ref().unwrap()[0].name,
+            "fs_read"
+        );
+        assert_eq!(messages[5].role, "tool");
+        assert_eq!(messages[5].tool_call_id.as_deref(), Some("call_1"));
+        assert_eq!(messages[5].content.as_deref(), Some("文件内容"));
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 旧日志（无 history 事件）：退化为 system + 问答对重建，纯 tool_call 轮跳过
+    #[test]
+    fn test_rebuild_history_fallback_qa_pairs() {
+        let dir = temp_sessions_dir("rebuild-fallback");
+        let id = "20260810-100000-old00001";
+        write_fixture(
+            &dir,
+            id,
+            &[
+                user_input("剪贴板里有什么"),
+                json!({"kind": "model_response", "payload": {"content": null, "tool_calls": ["clipboard_read"]}}),
+                json!({"kind": "tool_call", "payload": {"name": "clipboard_read", "args": {}}}),
+                json!({"kind": "tool_result", "payload": {"name": "clipboard_read", "result": "你好"}}),
+                json!({"kind": "model_response", "payload": {"content": "剪贴板里是：你好", "tool_calls": []}}),
+                user_input("再说一遍"),
+                json!({"kind": "model_response", "payload": {"content": "你好", "tool_calls": []}}),
+                json!({"kind": "done", "payload": {"reason": "completed"}}),
+            ],
+        );
+
+        let messages = rebuild_history(&dir, id).unwrap();
+        let roles: Vec<&str> = messages.iter().map(|m| m.role.as_str()).collect();
+        assert_eq!(roles, vec!["system", "user", "assistant", "user", "assistant"]);
+        assert_eq!(messages[1].content.as_deref(), Some("剪贴板里有什么"));
+        assert_eq!(messages[2].content.as_deref(), Some("剪贴板里是：你好"));
+        assert_eq!(messages[3].content.as_deref(), Some("再说一遍"));
+        assert_eq!(messages[4].content.as_deref(), Some("你好"));
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /// rebuild_history 同样拒绝目录穿越与缺失文件
+    #[test]
+    fn test_rebuild_history_rejects_traversal() {
+        let dir = temp_sessions_dir("rebuild-traversal");
+        for bad in ["../etc/passwd", "a/b", "..", "a.b", ""] {
+            assert!(rebuild_history(&dir, bad).is_err(), "应拒绝: {}", bad);
+        }
+        assert!(rebuild_history(&dir, "20260816-121651-notexist").is_err());
         fs::remove_dir_all(&dir).ok();
     }
 }

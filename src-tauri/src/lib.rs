@@ -62,6 +62,7 @@ pub fn run() {
             ai::agent::agent_ask,
             ai::agent::agent_cancel,
             ai::agent::agent_new_session,
+            ai::agent::agent_resume_session,
             ai::plugin_tools::plugin_tool_result,
             ai::session::open_sessions_dir,
             ai::session::agent_list_sessions,

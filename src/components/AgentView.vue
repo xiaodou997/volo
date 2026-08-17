@@ -38,8 +38,8 @@
 
     <!-- 会话时间线 / 历史回放 -->
     <div v-else class="agent-content" ref="contentRef">
-      <!-- 用户问题（实时会话首轮） -->
-      <div v-if="viewMode === 'chat'" class="user-question">{{ query }}</div>
+      <!-- 用户问题（实时会话首轮；从回放续聊时不重复展示，时间线里已有） -->
+      <div v-if="viewMode === 'chat' && !resumed" class="user-question">{{ query }}</div>
 
       <!-- 等待首个事件 -->
       <div v-if="viewMode === 'chat' && loading" class="loading-hint">思考中…</div>
@@ -70,6 +70,16 @@
       <!-- 完成 / 回放标记 -->
       <div v-if="viewMode === 'replay'" class="done-marker">— 回放 —</div>
       <div v-else-if="finished && !hasError" class="done-marker">✓ 已完成</div>
+    </div>
+
+    <!-- 回放底栏：从该会话继续对话 -->
+    <div v-if="viewMode === 'replay'" class="follow-up-bar">
+      <span v-if="resumeError" class="session-error resume-error">{{ resumeError }}</span>
+      <button
+        class="follow-up-send resume-btn"
+        :disabled="resuming"
+        @click="resumeSession"
+      >{{ resuming ? '恢复中…' : '继续对话' }}</button>
     </div>
 
     <!-- 追问输入栏（实时会话结束后才可用） -->
@@ -138,6 +148,11 @@ const sessions = ref<SessionMeta[]>([]);
 const sessionsLoading = ref(false);
 const sessionsError = ref('');
 const followUp = ref('');
+// 从回放继续会话：当前回放的会话 id / 是否已恢复为实时会话 / 恢复中与错误状态
+const currentSessionId = ref<string | null>(null);
+const resumed = ref(false);
+const resuming = ref(false);
+const resumeError = ref('');
 
 const hasError = computed(() => timeline.value.some((item) => item.kind === 'error'));
 
@@ -201,14 +216,38 @@ function replayToTimeline(event: ReplayEvent): TimelineItem | null {
 
 async function openSession(sessionId: string) {
   sessionsError.value = '';
+  resumeError.value = '';
   try {
     const events = await invoke<ReplayEvent[]>('agent_read_session', { sessionId });
     replayTimeline.value = events
       .map(replayToTimeline)
       .filter((item): item is TimelineItem => item !== null);
+    currentSessionId.value = sessionId;
     viewMode.value = 'replay';
   } catch (e) {
     sessionsError.value = String(e);
+  }
+}
+
+// 从回放继续会话：后端恢复消息级历史后，把回放时间线并入实时时间线，
+// 切到 chat 模式（finished=true 使追问输入栏可用）
+async function resumeSession() {
+  if (!currentSessionId.value || resuming.value) return;
+  resumeError.value = '';
+  resuming.value = true;
+  try {
+    await invoke('agent_resume_session', { sessionId: currentSessionId.value });
+    timeline.value = [...replayTimeline.value];
+    replayTimeline.value = [];
+    resumed.value = true;
+    loading.value = false;
+    finished.value = true;
+    viewMode.value = 'chat';
+    await scrollToBottom();
+  } catch (e) {
+    resumeError.value = String(e);
+  } finally {
+    resuming.value = false;
   }
 }
 
@@ -627,5 +666,15 @@ onUnmounted(() => {
 .follow-up-send:disabled {
   opacity: 0.5;
   cursor: default;
+}
+
+/* 回放底栏：错误文本占满剩余空间，按钮靠右 */
+.resume-error {
+  flex: 1;
+  padding: 0;
+}
+
+.resume-btn {
+  margin-left: auto;
 }
 </style>

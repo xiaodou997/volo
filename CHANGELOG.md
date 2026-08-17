@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - 应用图标与 logo（V 形飞燕设计，全平台图标集）
 - 设置项"Dock 图标"：可关闭 Dock 栏图标只保留菜单栏托盘（macOS，切换 ActivationPolicy 立即生效）
+- 从回放继续会话：每轮结束向会话日志落消息级历史快照（`history` 事件），回放页"继续对话"恢复完整上下文（含 tool 调用细节）后续聊；旧日志无快照时退化为问答对重建
 
 ### Fixed
 - 修复设置页"关于与更新"区块使用字母 V 占位而非真实 logo 的问题
