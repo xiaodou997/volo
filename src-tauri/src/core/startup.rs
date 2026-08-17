@@ -170,6 +170,12 @@ impl StartupManager {
         // 原生菜单（macOS WebView 的复制粘贴快捷键依赖它）
         crate::core::menu::setup_menu(app)?;
 
+        // Dock 图标显隐（读配置，仅 macOS 实际生效）
+        {
+            let visible = app.state::<crate::core::Config>().get().show_dock_icon;
+            crate::core::config::apply_dock_icon_visibility(app, visible);
+        }
+
         // 创建托盘
         create_tray(app)?;
 

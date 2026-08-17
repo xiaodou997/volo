@@ -56,6 +56,8 @@ pub fn run() {
             // 凭证
             core::config::llm_set_api_key,
             core::config::llm_has_api_key,
+            // Dock 图标显隐
+            core::config::set_dock_icon_visible,
             // AI Agent
             ai::agent::agent_ask,
             ai::agent::agent_cancel,

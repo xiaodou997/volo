@@ -106,6 +106,19 @@
 
         <div class="setting-item">
           <div class="setting-label">
+            <span class="label-text">Dock 图标</span>
+            <span class="label-desc">在 Dock 栏显示应用图标（macOS），关闭后只保留菜单栏托盘</span>
+          </div>
+          <div class="setting-control">
+            <label class="toggle">
+              <input type="checkbox" v-model="settings.showDockIcon" @change="onDockIconChange" />
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+        </div>
+
+        <div class="setting-item">
+          <div class="setting-label">
             <span class="label-text">搜索历史</span>
             <span class="label-desc">记录搜索历史</span>
           </div>
@@ -279,7 +292,7 @@
         <h3 class="section-title">关于与更新</h3>
 
         <div class="about-info">
-          <div class="app-logo">V</div>
+          <img class="app-logo" :src="logoUrl" alt="Volo logo" />
           <div class="app-name">Volo</div>
           <div class="app-version">版本 {{ appVersion }}</div>
           <div class="app-desc">桌面效率工具箱</div>
@@ -332,6 +345,7 @@ import { check, type Update } from '@tauri-apps/plugin-updater';
 import { relaunch } from '@tauri-apps/plugin-process';
 import { useSearchStore } from '../stores/search';
 import type { LlmConfig, McpServerConfig, PermissionGrant, PermissionScope, RiskLevel } from '../api/rubick';
+import logoUrl from '../assets/logo.png';
 
 const emit = defineEmits<{
   (e: 'back'): void;
@@ -345,6 +359,7 @@ const settings = ref({
   autoLaunch: false,
   hideOnBlur: true,
   enableHistory: true,
+  showDockIcon: true,
 });
 
 // 快捷键录制状态
@@ -375,6 +390,15 @@ async function saveSettings() {
 function onThemeChange() {
   applyTheme(settings.value.theme);
   saveSettings();
+}
+
+// Dock 图标显隐：走专用命令（持久化 + 立即生效，macOS 切换 ActivationPolicy）
+async function onDockIconChange() {
+  try {
+    await invoke('set_dock_icon_visible', { visible: settings.value.showDockIcon });
+  } catch (e) {
+    console.error('Failed to set dock icon visibility:', e);
+  }
 }
 
 // 应用主题
@@ -1092,13 +1116,6 @@ input[type="range"]::-webkit-slider-thumb {
 .app-logo {
   width: 64px;
   height: 64px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 32px;
-  font-weight: bold;
-  color: white;
-  background: linear-gradient(135deg, var(--accent-color), #6366f1);
   border-radius: 16px;
   margin-bottom: 12px;
 }

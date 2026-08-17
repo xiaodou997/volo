@@ -22,6 +22,9 @@ pub struct AppConfig {
     pub language: String,
     /// 是否显示引导
     pub show_guide: bool,
+    /// 是否在 Dock 栏显示应用图标（仅 macOS 生效，其余平台仅持久化）
+    #[serde(default = "default_true")]
+    pub show_dock_icon: bool,
     /// LLM 配置（含 API key，明文存于本地配置文件）
     #[serde(default)]
     pub llm: LlmConfig,
@@ -72,6 +75,7 @@ impl Default for AppConfig {
             hide_on_blur: true,
             language: "zh-CN".to_string(),
             show_guide: true,
+            show_dock_icon: true,
             llm: LlmConfig::default(),
             mcp_servers: HashMap::new(),
         }
@@ -178,6 +182,69 @@ pub fn llm_has_api_key(config: tauri::State<'_, Config>) -> bool {
     !config.get().llm.api_key.trim().is_empty()
 }
 
+/// 应用 Dock 图标显隐（仅 macOS 有效，其余平台为空操作）
+pub fn apply_dock_icon_visibility(app: &AppHandle, visible: bool) {
+    #[cfg(target_os = "macos")]
+    {
+        let policy = if visible {
+            tauri::ActivationPolicy::Regular
+        } else {
+            tauri::ActivationPolicy::Accessory
+        };
+        if let Err(e) = app.set_activation_policy(policy) {
+            tracing::warn!("set_activation_policy failed: {}", e);
+        }
+        // Accessory → Regular 切换后 macOS 会把 Dock 图标还原成进程默认的 exec 图标，
+        // 显式重设应用图标修复（对打包应用无影响，图标同源）
+        if visible {
+            set_macos_app_icon();
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (app, visible);
+    }
+}
+
+/// macOS：用内嵌的 icon.png 显式设置 NSApplication 图标
+#[cfg(target_os = "macos")]
+fn set_macos_app_icon() {
+    use cocoa::base::{id, nil};
+    use objc::{class, msg_send, sel, sel_impl};
+
+    static PNG: &[u8] = include_bytes!("../../icons/icon.png");
+    unsafe {
+        let data: id = msg_send![class!(NSData),
+            dataWithBytes: PNG.as_ptr() as *const std::ffi::c_void
+            length: PNG.len() as u64
+        ];
+        if data == nil {
+            return;
+        }
+        let image: id = msg_send![class!(NSImage), alloc];
+        let image: id = msg_send![image, initWithData: data];
+        if image == nil {
+            return;
+        }
+        let nsapp: id = msg_send![class!(NSApplication), sharedApplication];
+        let _: () = msg_send![nsapp, setApplicationIconImage: image];
+    }
+}
+
+/// 设置 Dock 图标显隐：持久化配置并立即生效（macOS）
+#[tauri::command]
+pub fn set_dock_icon_visible(
+    app: AppHandle,
+    config: tauri::State<'_, Config>,
+    visible: bool,
+) -> Result<()> {
+    let mut app_config = config.get();
+    app_config.show_dock_icon = visible;
+    config.save(app_config)?;
+    apply_dock_icon_visibility(&app, visible);
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -219,6 +286,8 @@ mod tests {
         }"#;
         let config: AppConfig = serde_json::from_str(legacy).unwrap();
         assert!(config.mcp_servers.is_empty());
+        // 旧配置没有 showDockIcon 字段，默认显示
+        assert!(config.show_dock_icon);
     }
 
     #[test]

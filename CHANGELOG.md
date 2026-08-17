@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- 应用图标与 logo（V 形飞燕设计，全平台图标集）
+- 设置项"Dock 图标"：可关闭 Dock 栏图标只保留菜单栏托盘（macOS，切换 ActivationPolicy 立即生效）
+
+### Fixed
+- 修复设置页"关于与更新"区块使用字母 V 占位而非真实 logo 的问题
+- 修复 Dock 图标关闭再开启后显示为终端 exec 图标的问题（Accessory→Regular 切换后重设 NSApplication 图标）
+
 ## [1.8.0] - 2026-08-17
 
 首个公开迭代发布（累积 v1.4–v1.8 的全部变更）。
