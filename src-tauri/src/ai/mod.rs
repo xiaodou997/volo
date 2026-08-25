@@ -8,4 +8,5 @@ pub mod llm;
 pub mod mcp;
 pub mod plugin_tools;
 pub mod session;
+pub mod skill;
 pub mod tools;

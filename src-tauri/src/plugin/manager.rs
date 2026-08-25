@@ -374,7 +374,7 @@ fn load_plugin_from_dir(dir: &PathBuf) -> Result<Plugin> {
 }
 
 /// 递归复制目录
-fn copy_dir_all(src: &PathBuf, dst: &PathBuf) -> Result<()> {
+pub(crate) fn copy_dir_all(src: &PathBuf, dst: &PathBuf) -> Result<()> {
     fs::create_dir_all(dst)?;
 
     for entry in fs::read_dir(src)? {

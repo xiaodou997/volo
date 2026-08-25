@@ -265,6 +265,36 @@
         <div v-if="mcpFormError" class="mcp-form-error">{{ mcpFormError }}</div>
       </section>
 
+      <!-- 技能 -->
+      <section class="settings-section">
+        <h3 class="section-title">技能</h3>
+
+        <div class="mcp-hint">
+          技能是包含 SKILL.md 的目录，向内置 Agent 提供可复用的任务指令。配置即信任——请只添加你信任的技能。增删后下次问 AI 时生效。
+        </div>
+
+        <div v-if="skills.length === 0" class="grants-empty">暂无已安装技能</div>
+
+        <div v-for="skill in skills" :key="skill.name" class="setting-item">
+          <div class="setting-label">
+            <span class="label-text">
+              {{ skill.name }}
+              <span v-if="skill.version" class="skill-version">v{{ skill.version }}</span>
+            </span>
+            <span class="label-desc">{{ skill.description || '（无描述）' }}</span>
+          </div>
+          <div class="setting-control">
+            <button class="danger-btn" @click="removeSkill(skill.name)">删除</button>
+          </div>
+        </div>
+
+        <div class="mcp-add-form">
+          <button class="action-btn" @click="addSkill">从目录安装…</button>
+          <button class="action-btn" @click="openSkillsDir">打开技能目录</button>
+        </div>
+        <div v-if="skillError" class="mcp-form-error">{{ skillError }}</div>
+      </section>
+
       <!-- 权限管理 -->
       <section class="settings-section">
         <h3 class="section-title">权限管理</h3>
@@ -344,7 +374,8 @@ import { getVersion } from '@tauri-apps/api/app';
 import { check, type Update } from '@tauri-apps/plugin-updater';
 import { relaunch } from '@tauri-apps/plugin-process';
 import { useSearchStore } from '../stores/search';
-import type { LlmConfig, McpServerConfig, PermissionGrant, PermissionScope, RiskLevel } from '../api/rubick';
+import { withNativeDialog } from '../composables/nativeDialog';
+import type { LlmConfig, McpServerConfig, PermissionGrant, PermissionScope, RiskLevel, SkillMeta } from '../api/rubick';
 import logoUrl from '../assets/logo.png';
 
 const emit = defineEmits<{
@@ -633,6 +664,55 @@ function removeMcpServer(name: string) {
   saveMcpServers();
 }
 
+// ============ 技能 ============
+
+const skills = ref<SkillMeta[]>([]);
+const skillError = ref('');
+
+// 加载已安装技能列表
+async function loadSkills() {
+  try {
+    skills.value = await invoke<SkillMeta[]>('skill_list');
+  } catch (e) {
+    console.error('Failed to load skills:', e);
+  }
+}
+
+// 选择目录安装技能（目录需含合法 SKILL.md）
+async function addSkill() {
+  skillError.value = '';
+  try {
+    // 原生面板期间抑制失焦隐藏（withNativeDialog）
+    const selected = await withNativeDialog(() => invoke<string | null>('fs_pick_folder'));
+    if (!selected) return;
+    await invoke('skill_install_from_dir', { sourceDir: selected });
+    await loadSkills();
+  } catch (e) {
+    skillError.value = String(e);
+  }
+}
+
+// 按 name 删除技能
+async function removeSkill(name: string) {
+  skillError.value = '';
+  try {
+    await invoke('skill_remove', { name });
+    await loadSkills();
+  } catch (e) {
+    skillError.value = String(e);
+  }
+}
+
+// 在系统文件管理器中打开技能目录（手动管理用）
+async function openSkillsDir() {
+  skillError.value = '';
+  try {
+    await invoke('open_skills_dir');
+  } catch (e) {
+    skillError.value = String(e);
+  }
+}
+
 // ============ 权限管理 ============
 
 // 已授权的插件权限
@@ -772,6 +852,7 @@ onMounted(() => {
   loadGrants();
   loadLlmConfig();
   loadMcpServers();
+  loadSkills();
   loadAppVersion();
   mediaQuery.addEventListener('change', handleSystemThemeChange);
 });
@@ -1071,6 +1152,14 @@ input[type="range"]::-webkit-slider-thumb {
 .mcp-form-error {
   font-size: 12px;
   color: var(--danger-color);
+}
+
+/* 技能 */
+.skill-version {
+  margin-left: 6px;
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-tertiary);
 }
 
 /* 权限管理 */

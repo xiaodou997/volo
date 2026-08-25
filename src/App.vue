@@ -18,6 +18,7 @@ import ApprovalDialog from './components/ApprovalDialog.vue';
 import { useSearchStore } from './stores/search';
 import { runCommand, runListCommand, type ListCommandHandle, type ListCommandItem } from './bridge/commandRunner';
 import { initToolRunner } from './bridge/toolRunner';
+import { nativeDialogOpen } from './composables/nativeDialog';
 import './api/rubick';
 
 const mainWindow = getCurrentWindow();
@@ -417,8 +418,8 @@ onMounted(async () => {
   // 插件工具执行器：监听 Rust 侧 Agent 的 plugin-tool-call，常驻整个 App 生命周期
   void initToolRunner();
   const unlisten = await mainWindow.onFocusChanged(({ payload }: { payload: boolean }) => {
-    if (!payload && !settingsMode.value && !pluginManagerMode.value && !pluginMode.value && !agentMode.value) {
-      // 失焦时隐藏（排除设置模式、插件管理模式、插件模式和 Agent 模式）
+    if (!payload && !nativeDialogOpen.value && !settingsMode.value && !pluginManagerMode.value && !pluginMode.value && !agentMode.value) {
+      // 失焦时隐藏（排除原生对话框打开中、设置模式、插件管理模式、插件模式和 Agent 模式）
       // list 命令模式：失焦隐藏同时销毁 iframe、退出模式
       if (listCommandMode.value) {
         exitListCommand();

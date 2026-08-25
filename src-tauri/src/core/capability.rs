@@ -51,6 +51,11 @@ pub fn capability_meta(capability: &str) -> CapabilityMeta {
             risk: RiskLevel::Low,
             description: "写入插件数据库",
         },
+        "skill.read" => CapabilityMeta {
+            id: "skill.read",
+            risk: RiskLevel::Low,
+            description: "读取技能指令",
+        },
         "clipboard.read" => CapabilityMeta {
             id: "clipboard.read",
             risk: RiskLevel::Medium,

@@ -124,6 +124,13 @@ export interface AgentEvent {
   result?: string;
 }
 
+// 技能元数据（SKILL.md frontmatter；skill_list 返回）
+export interface SkillMeta {
+  name: string;
+  description: string;
+  version: string;
+}
+
 // agent_list_sessions 返回的会话元信息（按时间倒序）
 export interface SessionMeta {
   id: string;

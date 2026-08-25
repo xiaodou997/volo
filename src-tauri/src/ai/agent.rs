@@ -32,6 +32,29 @@ fs_read 读取文本文件、notification_show 发送系统通知；\
 谨慎行事，先读后写；涉及用户数据的操作说明理由；\
 工具返回错误时向用户解释原因并给出替代建议。";
 
+/// 组装 system prompt：基础提示 + 可用技能目录。
+/// 渐进披露：目录只列 name + description，正文由模型经 skill_load 按需加载
+pub fn build_system_prompt(skills: &[super::skill::SkillMeta]) -> String {
+    if skills.is_empty() {
+        return SYSTEM_PROMPT.to_string();
+    }
+    let catalog = skills
+        .iter()
+        .map(|s| {
+            if s.description.is_empty() {
+                s.name.clone()
+            } else {
+                format!("{}（{}）", s.name, s.description)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("、");
+    format!(
+        "{}\n可用技能：{}。用户意图与某个技能匹配时，先调用 skill_load 加载该技能的完整指令，再严格按指令执行。",
+        SYSTEM_PROMPT, catalog
+    )
+}
+
 /// 事件类型（serde snake_case：message/tool_call/tool_result/done/error）
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -291,15 +314,16 @@ impl AgentManager {
     }
 
     /// 尝试开始一轮对话：busy 则报错；否则置 busy、复位取消标志，
-    /// 压入 system（首轮）+ user 消息后返回本地历史副本（此后不再持锁）
-    pub fn begin_turn(&self, query: &str) -> Result<Vec<Message>> {
+    /// 压入 system（首轮，由调用方按当前技能目录组装）+ user 消息后返回本地历史副本
+    /// （此后不再持锁）
+    pub fn begin_turn(&self, query: &str, system_prompt: &str) -> Result<Vec<Message>> {
         if self.busy.swap(true, Ordering::SeqCst) {
             return Err(VoloError::Other("上一个会话还在进行中".to_string()));
         }
         self.cancel.store(false, Ordering::Relaxed);
         let mut history = self.history.lock().unwrap();
         if history.is_empty() {
-            history.push(Message::system(SYSTEM_PROMPT));
+            history.push(Message::system(system_prompt));
         }
         history.push(Message::user(query));
         Ok(history.clone())
@@ -364,8 +388,10 @@ pub fn agent_ask(
         }
     };
 
-    // busy 防护 + 压入 system（首轮）/user 消息，拿到本地历史副本（此后不再持锁）
-    let mut messages = manager.begin_turn(&query)?;
+    // busy 防护 + 压入 system（首轮，含当前技能目录）/user 消息，拿到本地历史副本（此后不再持锁）
+    let skills = super::skill::scan_skills(&super::skill::skills_dir(&app)?);
+    let system_prompt = build_system_prompt(&skills);
+    let mut messages = manager.begin_turn(&query, &system_prompt)?;
     if let Some(log) = session_log.as_mut() {
         let _ = log.log("user_input", &json!({ "query": query }));
     }
@@ -949,20 +975,20 @@ mod tests {
     #[test]
     fn test_begin_turn_busy_guard() {
         let manager = AgentManager::new();
-        let messages = manager.begin_turn("第一个问题").unwrap();
+        let messages = manager.begin_turn("第一个问题", SYSTEM_PROMPT).unwrap();
         assert!(manager.is_busy());
         assert_eq!(messages.len(), 2);
         assert_eq!(messages[0].role, "system");
         assert_eq!(messages[1].role, "user");
 
         // 进行中再次 begin_turn 被拒
-        let err = manager.begin_turn("并发问题").unwrap_err();
+        let err = manager.begin_turn("并发问题", SYSTEM_PROMPT).unwrap_err();
         assert!(err.to_string().contains("还在进行中"));
 
         // 结束后回写历史，下一轮在同一历史上继续
         manager.finish_turn(messages);
         assert!(!manager.is_busy());
-        let messages = manager.begin_turn("追问").unwrap();
+        let messages = manager.begin_turn("追问", SYSTEM_PROMPT).unwrap();
         assert_eq!(messages.len(), 3);
         assert_eq!(messages[2].content.as_deref(), Some("追问"));
     }
@@ -971,7 +997,7 @@ mod tests {
     #[test]
     fn test_new_session_clears_history() {
         let manager = AgentManager::new();
-        let messages = manager.begin_turn("旧会话").unwrap();
+        let messages = manager.begin_turn("旧会话", SYSTEM_PROMPT).unwrap();
         manager.finish_turn(messages);
         manager.cancel_flag().store(true, Ordering::Relaxed);
 
@@ -979,10 +1005,37 @@ mod tests {
         assert!(!manager.cancel_flag().load(Ordering::Relaxed));
 
         // 历史已清空：下一轮重新压入 system + user
-        let messages = manager.begin_turn("新会话").unwrap();
+        let messages = manager.begin_turn("新会话", SYSTEM_PROMPT).unwrap();
         assert_eq!(messages.len(), 2);
         assert_eq!(messages[0].role, "system");
         manager.finish_turn(messages);
+    }
+
+    /// build_system_prompt：无技能时返回基础提示；有技能时追加目录（name + description）
+    #[test]
+    fn test_build_system_prompt() {
+        assert_eq!(build_system_prompt(&[]), SYSTEM_PROMPT);
+
+        let skills = vec![
+            super::super::skill::SkillMeta {
+                name: "weekly-report".to_string(),
+                description: "生成结构化周报".to_string(),
+                version: "1.0.0".to_string(),
+            },
+            super::super::skill::SkillMeta {
+                name: "bare".to_string(),
+                description: String::new(),
+                version: String::new(),
+            },
+        ];
+        let prompt = build_system_prompt(&skills);
+        assert!(prompt.starts_with(SYSTEM_PROMPT));
+        assert!(prompt.contains("weekly-report（生成结构化周报）"));
+        assert!(prompt.contains("、"));
+        assert!(prompt.contains("skill_load"));
+        // 无描述的技能只列 name
+        assert!(prompt.contains("bare"));
+        assert!(!prompt.contains("bare（）"));
     }
 
     /// load_history：busy 时拒绝；载入后 begin_turn 在已有历史上续接且不重复压 system
@@ -991,7 +1044,7 @@ mod tests {
         let manager = AgentManager::new();
 
         // busy 中拒绝载入
-        let inflight = manager.begin_turn("进行中").unwrap();
+        let inflight = manager.begin_turn("进行中", SYSTEM_PROMPT).unwrap();
         let restored = vec![
             Message::system(SYSTEM_PROMPT),
             Message::user("旧问题"),
@@ -1006,7 +1059,7 @@ mod tests {
         assert!(!manager.cancel_flag().load(Ordering::Relaxed));
 
         // 续聊：历史含 system，begin_turn 只压新 user
-        let messages = manager.begin_turn("追问").unwrap();
+        let messages = manager.begin_turn("追问", SYSTEM_PROMPT).unwrap();
         assert_eq!(messages.len(), 4);
         assert_eq!(messages[0].role, "system");
         assert_eq!(messages[2].content.as_deref(), Some("旧回答"));

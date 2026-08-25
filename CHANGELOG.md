@@ -13,10 +13,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Agent 会话停止按钮：流式输出中途可中断（取消标志下沉到 SSE 读取循环，已输出内容保留，残句不入历史）
 - 启动器空输入直达入口：搜索框为空时显示"AI 会话历史"，回车直接打开历史列表（可回放、继续对话），无需先发问
 - List mode 二级动作面板：列表项可声明 `actions`（`[{id, title, description?, icon?}]`），Tab/→ 展开动作面板、←/Esc 收起（重触发 onRun 恢复列表）、Enter 仍是 onSelect 默认动作；插件侧新增 `rubick.command.onAction(cb)`（回传 itemId + actionId）；uuid-gen 1.3.0 示范接入
+- Skill Runtime（技能系统）：技能 = 含 SKILL.md 的目录（frontmatter 声明 name/description/version + Markdown 指令正文）；Agent system prompt 按渐进披露只列技能目录，模型匹配意图后经内置工具 `skill_load`（Low 风险）加载完整指令执行；设置页"技能"区块（目录安装/列表/删除/打开目录）；附 weekly-report、translate-polish 两个示范技能
 
 ### Fixed
 - 修复设置页"关于与更新"区块使用字母 V 占位而非真实 logo 的问题
 - 修复 Dock 图标关闭再开启后显示为终端 exec 图标的问题（Accessory→Regular 切换后重设 NSApplication 图标）
+- 修复原生文件/目录选择框弹出时主窗口被失焦隐藏的问题：弹框前激活聚焦主窗口，且对话框打开期间全局抑制失焦隐藏（影响设置页技能安装、插件管理器目录安装）
 
 ## [1.8.0] - 2026-08-17
 

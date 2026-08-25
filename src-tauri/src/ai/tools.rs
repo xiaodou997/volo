@@ -121,6 +121,20 @@ impl ToolRegistry {
                     "required": ["text"],
                 }),
             },
+            ToolSpec {
+                name: "skill_load".to_string(),
+                description: "加载指定技能的完整指令（用户意图与某个可用技能匹配时调用）".to_string(),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "name": {
+                            "type": "string",
+                            "description": "技能名（system prompt 中列出的可用技能之一）",
+                        },
+                    },
+                    "required": ["name"],
+                }),
+            },
         ]
     }
 
@@ -133,6 +147,7 @@ impl ToolRegistry {
             "fs_write" => Some("fs.write"),
             "shell_open" => Some("shell.open"),
             "clipboard_write" => Some("clipboard.write"),
+            "skill_load" => Some("skill.read"),
             _ => None,
         }
     }
@@ -160,6 +175,7 @@ impl ToolRegistry {
                 .get("target")
                 .and_then(Value::as_str)
                 .map(Self::expand_tilde),
+            "skill_load" => args.get("name").and_then(Value::as_str).map(String::from),
             _ => None,
         };
         let resource = resource_owned.as_deref();
@@ -249,6 +265,17 @@ impl ToolRegistry {
                     .map_err(|e| VoloError::Other(format!("Clipboard write failed: {}", e)))?;
                 Ok(Value::String("已写入剪贴板".to_string()))
             }
+            "skill_load" => {
+                let name = args
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| VoloError::Other("skill_load 缺少必填参数 name".to_string()))?;
+                let body = crate::ai::skill::load_skill_body(
+                    &crate::ai::skill::skills_dir(app)?,
+                    name,
+                )?;
+                Ok(Value::String(body))
+            }
             _ => unreachable!("capability_of 已过滤未知工具"),
         }
     }
@@ -327,7 +354,7 @@ mod tests {
     #[test]
     fn test_specs_are_well_formed() {
         let specs = ToolRegistry::specs();
-        assert_eq!(specs.len(), 6);
+        assert_eq!(specs.len(), 7);
 
         for spec in &specs {
             assert!(!spec.name.is_empty());

@@ -2,11 +2,21 @@
 
 use serde::{Deserialize, Serialize};
 use tauri_plugin_dialog::DialogExt;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 use crate::core::permission::{require, PermissionEngine};
 use crate::error::Result;
 use crate::plugin::manager::PluginState;
 use base64::Engine;
+
+/// 弹原生文件对话框前的准备：激活并聚焦主窗口。
+/// 主窗口是 alwaysOnTop + skipTaskbar 的无边框浮动窗，独立弹出的文件面板
+/// 可能被压在下层、或因焦点切换触发启动器的失焦隐藏
+fn prepare_dialog(app: &AppHandle) {
+    if let Some(win) = app.get_webview_window("main") {
+        let _ = win.show();
+        let _ = win.set_focus();
+    }
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct FileInfo {
@@ -221,6 +231,7 @@ pub async fn fs_pick_file(
 ) -> Result<Option<String>> {
     require(&app, &engine, &plugins, plugin_id.as_deref(), "fs.pick", None).await?;
 
+    prepare_dialog(&app);
     let mut dialog = app.dialog().file();
 
     // 添加过滤器
@@ -248,6 +259,7 @@ pub async fn fs_pick_files(
 ) -> Result<Vec<String>> {
     require(&app, &engine, &plugins, plugin_id.as_deref(), "fs.pick", None).await?;
 
+    prepare_dialog(&app);
     let mut dialog = app.dialog().file();
 
     if let Some(opts) = options {
@@ -273,6 +285,7 @@ pub async fn fs_pick_folder(
 ) -> Result<Option<String>> {
     require(&app, &engine, &plugins, plugin_id.as_deref(), "fs.pick", None).await?;
 
+    prepare_dialog(&app);
     let folder_path = app.dialog().file().blocking_pick_folder();
     Ok(folder_path.map(|p| p.to_string()))
 }

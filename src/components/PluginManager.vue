@@ -94,6 +94,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
+import { withNativeDialog } from '../composables/nativeDialog';
 
 const emit = defineEmits<{
   (e: 'back'): void;
@@ -168,7 +169,8 @@ async function uninstallPlugin(plugin: Plugin) {
 // 选择插件目录
 async function selectPluginDir() {
   try {
-    const selected = await invoke<string | null>('fs_pick_folder');
+    // 原生面板期间抑制失焦隐藏（withNativeDialog）
+    const selected = await withNativeDialog(() => invoke<string | null>('fs_pick_folder'));
     if (selected) {
       await invoke('install_plugin_from_dir', { sourceDir: selected });
       await loadPlugins();

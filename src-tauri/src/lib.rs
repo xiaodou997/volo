@@ -67,6 +67,11 @@ pub fn run() {
             ai::session::open_sessions_dir,
             ai::session::agent_list_sessions,
             ai::session::agent_read_session,
+            // Skill
+            ai::skill::skill_list,
+            ai::skill::skill_install_from_dir,
+            ai::skill::skill_remove,
+            ai::skill::open_skills_dir,
             // 快捷键
             core::shortcut::register_shortcut,
             core::shortcut::unregister_shortcut,
