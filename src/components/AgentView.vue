@@ -77,6 +77,11 @@
         <template v-else>
           <div class="item-body markdown-body" v-html="renderMarkdown(item.text)"></div>
           <span v-if="item.streaming" class="stream-cursor"></span>
+          <button
+            v-if="item.kind === 'message' && !item.streaming && item.text"
+            class="msg-copy-btn"
+            @click="copyMessage(index, item.text)"
+          >{{ copiedIndex === index ? '已复制 ✓' : '复制' }}</button>
         </template>
       </div>
 
@@ -314,6 +319,7 @@ async function openSession(sessionId: string) {
       .filter((item): item is TimelineItem => item !== null);
     currentSessionId.value = sessionId;
     viewMode.value = 'replay';
+    void enhanceCodeBlocks();
   } catch (e) {
     sessionsError.value = String(e);
   }
@@ -412,6 +418,52 @@ async function scrollToBottom() {
   }
 }
 
+// 复制整条回答（按钮悬停气泡右上角显示）
+const copiedIndex = ref(-1);
+
+async function copyMessage(index: number, text: string) {
+  try {
+    await navigator.clipboard.writeText(text);
+    copiedIndex.value = index;
+    setTimeout(() => {
+      if (copiedIndex.value === index) copiedIndex.value = -1;
+    }, 1500);
+  } catch (e) {
+    console.warn('复制失败', e);
+  }
+}
+
+// 给渲染出的代码块注入复制按钮。
+// v-html 每次渲染都会重建 DOM（流式输出期间每个 delta 都会），
+// 所以要在每次渲染后重新增强；copy-enhanced 类防止重复注入
+async function enhanceCodeBlocks() {
+  await nextTick();
+  contentRef.value?.querySelectorAll('pre:not(.copy-enhanced)').forEach((pre) => {
+    pre.classList.add('copy-enhanced');
+    const btn = document.createElement('button');
+    btn.className = 'code-copy-btn';
+    btn.textContent = '复制';
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      // 按钮自身在 pre 内，取 code 元素文本，兜底时剔除按钮节点
+      const codeEl = pre.querySelector('code');
+      const code =
+        codeEl?.textContent ??
+        [...pre.childNodes]
+          .filter((n) => n.nodeName !== 'BUTTON')
+          .map((n) => n.textContent ?? '')
+          .join('');
+      void navigator.clipboard.writeText(code).then(() => {
+        btn.textContent = '已复制 ✓';
+        setTimeout(() => {
+          btn.textContent = '复制';
+        }, 1500);
+      });
+    });
+    pre.appendChild(btn);
+  });
+}
+
 async function handleEvent(event: AgentEvent) {
   loading.value = false;
   // 流式增量片段：追加到当前正在流式输出的气泡（没有则新建一个）
@@ -423,6 +475,7 @@ async function handleEvent(event: AgentEvent) {
       timeline.value.push({ kind: 'message', text: event.content ?? '', streaming: true });
     }
     await scrollToBottom();
+    void enhanceCodeBlocks();
     return;
   }
   // 任何非增量事件到来，说明上一段流式输出已结束
@@ -460,6 +513,7 @@ async function handleEvent(event: AgentEvent) {
       break;
   }
   await scrollToBottom();
+  void enhanceCodeBlocks();
 }
 
 let unlisten: UnlistenFn | null = null;
@@ -636,11 +690,56 @@ onUnmounted(() => {
   border-radius: 6px;
   overflow-x: auto;
   margin: 8px 0;
+  position: relative;
 }
 
 .markdown-body :deep(pre code) {
   background: none;
   padding: 0;
+}
+
+/* 代码块复制按钮（JS 注入节点没有 scoped 属性，样式必须走 :deep） */
+.markdown-body :deep(.code-copy-btn) {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  font-size: 12px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-primary);
+  color: var(--text-tertiary);
+  border-radius: 4px;
+  padding: 2px 8px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.markdown-body :deep(pre:hover .code-copy-btn) {
+  opacity: 1;
+}
+
+/* 整条回答的复制按钮（悬停气泡时显示在右上角） */
+.timeline-message {
+  position: relative;
+}
+
+.msg-copy-btn {
+  position: absolute;
+  top: 6px;
+  right: 0;
+  font-size: 12px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+  color: var(--text-tertiary);
+  border-radius: 4px;
+  padding: 2px 8px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.timeline-message:hover .msg-copy-btn {
+  opacity: 1;
 }
 
 .markdown-body :deep(blockquote) {
