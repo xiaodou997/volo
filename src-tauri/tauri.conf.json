@@ -84,7 +84,7 @@
       "endpoints": [
         "https://github.com/xiaodou997/volo/releases/latest/download/latest.json"
       ],
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDk4ODc5NTQ5NDIxOTE0QjAKUldTd0ZCbENTWldIbUt1NkJIUDFFWXhUd1VXVkdzdkE4Rm5sdWFCQndoenYrVzFCdHlENWl3enUK",
+      "pubkey": "ZFc1MGNuVnpkR1ZrSUdOdmJXMWxiblE2SUcxcGJtbHphV2R1SUhCMVlteHBZeUJyWlhrNklFVkdNek15T1RSRlEwUTFPRGhFTkVNS1VsZFNUV3BXYWs1VWFXdDZOelJsUzNSVGVFaEdTRXA2Y2xWelNWRjJWUzlrWmtsMFdISmlWMVk0ZFZkWGNGVm9OVTlrT0VzeUsxUUs=",
       "windows": {
         "installMode": "passive"
       }
