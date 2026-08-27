@@ -207,26 +207,28 @@ pub fn apply_dock_icon_visibility(app: &AppHandle, visible: bool) {
 }
 
 /// macOS：用内嵌的 icon.png 显式设置 NSApplication 图标
+// objc 0.2 的宏内部使用了过时的 `cfg(feature = "cargo-clippy")`，在宏展开处无法消除，故允许
 #[cfg(target_os = "macos")]
+#[allow(unexpected_cfgs)]
 fn set_macos_app_icon() {
-    use cocoa::base::{id, nil};
+    use objc::runtime::Object;
     use objc::{class, msg_send, sel, sel_impl};
 
     static PNG: &[u8] = include_bytes!("../../icons/icon.png");
     unsafe {
-        let data: id = msg_send![class!(NSData),
+        let data: *mut Object = msg_send![class!(NSData),
             dataWithBytes: PNG.as_ptr() as *const std::ffi::c_void
             length: PNG.len() as u64
         ];
-        if data == nil {
+        if data.is_null() {
             return;
         }
-        let image: id = msg_send![class!(NSImage), alloc];
-        let image: id = msg_send![image, initWithData: data];
-        if image == nil {
+        let image: *mut Object = msg_send![class!(NSImage), alloc];
+        let image: *mut Object = msg_send![image, initWithData: data];
+        if image.is_null() {
             return;
         }
-        let nsapp: id = msg_send![class!(NSApplication), sharedApplication];
+        let nsapp: *mut Object = msg_send![class!(NSApplication), sharedApplication];
         let _: () = msg_send![nsapp, setApplicationIconImage: image];
     }
 }
