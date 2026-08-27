@@ -59,10 +59,17 @@ export interface PluginInfo {
   description?: string;
 }
 
-// AI 查询伪结果（本地追加，不进 Rust 搜索）
+// AI 查询伪结果（本地追加，不进 Rust 搜索）；skill 为 @技能名 显式触发时解析出的技能名
 export interface AiQueryResult {
   type: 'ai';
   query: string;
+  skill?: string;
+}
+
+// @技能名 触发时的技能候选（选中后补全输入，不直接执行）
+export interface SkillEntryResult {
+  type: 'skill-entry';
+  skill: SkillMeta;
 }
 
 // list 模式命令推送到启动器的列表项（本地注入，不进 Rust 搜索）
@@ -95,6 +102,7 @@ export type SearchResult =
   | { type: 'file'; path: string; name: string; file_type: string; extension?: string }
   | { type: 'ai-history' } // 空输入时的 AI 会话历史直达入口（本地追加，不进 Rust 搜索）
   | CommandItemResult
+  | SkillEntryResult
   | AiQueryResult;
 
 // ============ AI / Agent ============

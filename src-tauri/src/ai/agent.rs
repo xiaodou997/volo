@@ -55,6 +55,15 @@ pub fn build_system_prompt(skills: &[super::skill::SkillMeta]) -> String {
     )
 }
 
+/// 显式技能注入（启动器 @技能名 触发）：把技能正文直接附进 system prompt，
+/// 跳过渐进披露，要求本次会话严格执行该技能指令
+fn append_explicit_skill(prompt: String, name: &str, body: &str) -> String {
+    format!(
+        "{}\n用户已显式指定技能 {}。其完整指令如下，本次会话严格按此执行：\n{}",
+        prompt, name, body
+    )
+}
+
 /// 事件类型（serde snake_case：message/tool_call/tool_result/done/error）
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -362,6 +371,7 @@ pub fn agent_ask(
     manager: State<'_, AgentManager>,
     config: State<'_, Config>,
     query: String,
+    skill: Option<String>,
 ) -> Result<()> {
     let llm = config.get().llm;
     if llm.model.trim().is_empty() {
@@ -389,8 +399,14 @@ pub fn agent_ask(
     };
 
     // busy 防护 + 压入 system（首轮，含当前技能目录）/user 消息，拿到本地历史副本（此后不再持锁）
-    let skills = super::skill::scan_skills(&super::skill::skills_dir(&app)?);
-    let system_prompt = build_system_prompt(&skills);
+    let skills_dir = super::skill::skills_dir(&app)?;
+    let skills = super::skill::scan_skills(&skills_dir);
+    let mut system_prompt = build_system_prompt(&skills);
+    // @技能名 显式触发：技能正文直接注入 system prompt（技能不存在则报错，不静默降级）
+    if let Some(name) = skill.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        let body = super::skill::load_skill_body(&skills_dir, name)?;
+        system_prompt = append_explicit_skill(system_prompt, name, &body);
+    }
     let mut messages = manager.begin_turn(&query, &system_prompt)?;
     if let Some(log) = session_log.as_mut() {
         let _ = log.log("user_input", &json!({ "query": query }));
@@ -1036,6 +1052,15 @@ mod tests {
         // 无描述的技能只列 name
         assert!(prompt.contains("bare"));
         assert!(!prompt.contains("bare（）"));
+    }
+
+    /// append_explicit_skill：@技能名 触发时把技能正文注入 system prompt
+    #[test]
+    fn test_append_explicit_skill() {
+        let prompt = append_explicit_skill(SYSTEM_PROMPT.to_string(), "weekly-report", "按此结构输出周报");
+        assert!(prompt.starts_with(SYSTEM_PROMPT));
+        assert!(prompt.contains("weekly-report"));
+        assert!(prompt.contains("按此结构输出周报"));
     }
 
     /// load_history：busy 时拒绝；载入后 begin_turn 在已有历史上续接且不重复压 system

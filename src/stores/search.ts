@@ -5,7 +5,7 @@
 import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
-import type { LlmConfig, ListCommandItem, SearchResult } from '../api/rubick';
+import type { LlmConfig, ListCommandItem, SearchResult, SkillMeta } from '../api/rubick';
 
 export const useSearchStore = defineStore('search', () => {
   // 状态
@@ -47,6 +47,11 @@ export const useSearchStore = defineStore('search', () => {
       return;
     }
 
+    // @技能名 触发：显式指定技能问 AI；无匹配技能时回退普通搜索
+    if (q.startsWith('@') && (await handleSkillTrigger(q))) {
+      return;
+    }
+
     loading.value = true;
     try {
       const r = await invoke<SearchResult[]>('search', { query: q });
@@ -59,6 +64,37 @@ export const useSearchStore = defineStore('search', () => {
     } finally {
       loading.value = false;
     }
+  }
+
+  // @技能名 解析：
+  // - "@技能名 问题"（技能名精确命中且有后续文本）→ 直接给"问 AI"入口，携带技能名
+  // - "@xxx"（未输完/未精确命中）→ 列匹配技能候选，选中补全输入
+  // 返回 false 表示不接管（技能列表不可用或无匹配），走普通搜索
+  async function handleSkillTrigger(q: string): Promise<boolean> {
+    let skills: SkillMeta[];
+    try {
+      skills = await invoke<SkillMeta[]>('skill_list');
+    } catch {
+      return false;
+    }
+    const m = q.match(/^@(\S+)(?:\s+([\s\S]+))?$/);
+    const partial = m ? m[1] : q.slice(1).trim();
+    const rest = m?.[2]?.trim() ?? '';
+
+    if (rest && skills.some((s) => s.name === partial)) {
+      results.value = [{ type: 'ai', query: rest, skill: partial }];
+      selectedIndex.value = 0;
+      return true;
+    }
+
+    const lower = partial.toLowerCase();
+    const matches = skills.filter((s) => !partial || s.name.toLowerCase().includes(lower));
+    if (matches.length === 0) {
+      return false;
+    }
+    results.value = matches.map((skill) => ({ type: 'skill-entry' as const, skill }));
+    selectedIndex.value = 0;
+    return true;
   }
 
   // 防抖搜索

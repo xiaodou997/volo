@@ -127,6 +127,8 @@ const props = defineProps<{
   query: string;
   // 打开方式：chat（默认，带上 query 立即发问）/ history（直达历史列表，不发问）
   initialMode?: 'chat' | 'history';
+  // @技能名 显式触发：首轮会话注入该技能完整指令
+  skill?: string;
 }>();
 
 const emit = defineEmits<{
@@ -173,7 +175,7 @@ const displayTimeline = computed(() =>
 const headerTitle = computed(() => {
   if (viewMode.value === 'history') return '历史会话';
   if (viewMode.value === 'replay') return '会话回放';
-  return '问 AI';
+  return props.skill ? `问 AI · @${props.skill}` : '问 AI';
 });
 
 function formatTime(iso: string): string {
@@ -299,7 +301,8 @@ async function sendFollowUp() {
   finished.value = false;
   await scrollToBottom();
   try {
-    await invoke('agent_ask', { query: q });
+    // 追问不带 skill：首轮已注入 system prompt，历史续接即可
+    await invoke('agent_ask', { query: q, skill: null });
   } catch (e) {
     loading.value = false;
     finished.value = true;
@@ -383,7 +386,7 @@ onMounted(async () => {
     return;
   }
   try {
-    await invoke('agent_ask', { query: props.query });
+    await invoke('agent_ask', { query: props.query, skill: props.skill ?? null });
   } catch (e) {
     loading.value = false;
     finished.value = true;

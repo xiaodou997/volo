@@ -34,6 +34,8 @@ const agentMode = ref(false);
 const agentQuery = ref('');
 // AgentView 打开方式：chat（带 query 直接发问）/ history（直达会话历史列表）
 const agentInitialMode = ref<'chat' | 'history'>('chat');
+// @技能名 显式触发：进入 Agent 时携带的技能名（无则 undefined）
+const agentSkill = ref<string | undefined>(undefined);
 const currentPlugin = ref<{ pluginId: string; featureId: string } | null>(null);
 const pluginViewRef = ref<InstanceType<typeof PluginView> | null>(null);
 
@@ -193,12 +195,15 @@ function handleClear() {
       // 清空搜索
       searchStore.clearSearch();
       updateWindowSize();
+    } else if (result.type === 'skill-entry') {
+      // @技能名 候选：补全输入为 "@name "，继续输入问题后回车发问
+      searchStore.search(`@${result.skill.name} `);
     } else if (result.type === 'ai') {
-      // 未配置 LLM 时引导去设置页，否则进入 Agent 模式
+      // 未配置 LLM 时引导去设置页，否则进入 Agent 模式（skill 为 @技能名 显式触发）
       if (!searchStore.llmConfigured) {
         enterSettings();
       } else {
-        enterAgent(result.query);
+        enterAgent(result.query, result.skill);
       }
     } else if (result.type === 'ai-history') {
       // 空输入入口：直达 AI 会话历史（可回放、继续对话）
@@ -206,14 +211,15 @@ function handleClear() {
     }
   }
 
-// 进入 Agent 模式（启动器入口永远是新会话；清空失败也继续）
-async function enterAgent(query: string) {
+// 进入 Agent 模式（启动器入口永远是新会话；清空失败也继续；skill 为 @技能名 显式触发）
+async function enterAgent(query: string, skill?: string) {
   try {
     await invoke('agent_new_session');
   } catch (e) {
     console.warn('agent_new_session 失败，继续进入 Agent 模式', e);
   }
   agentQuery.value = query;
+  agentSkill.value = skill;
   agentInitialMode.value = 'chat';
   agentMode.value = true;
   updateWindowSize();
@@ -222,6 +228,7 @@ async function enterAgent(query: string) {
 // 直达 AI 会话历史（空输入入口；不动当前会话状态）
 function enterAgentHistory() {
   agentQuery.value = '';
+  agentSkill.value = undefined;
   agentInitialMode.value = 'history';
   agentMode.value = true;
   updateWindowSize();
@@ -231,6 +238,7 @@ function enterAgentHistory() {
 function exitAgent() {
   agentMode.value = false;
   agentQuery.value = '';
+  agentSkill.value = undefined;
   agentInitialMode.value = 'chat';
   updateWindowSize();
 }
@@ -447,7 +455,7 @@ onMounted(async () => {
 
     <!-- Agent 模式 -->
     <template v-else-if="agentMode">
-      <AgentView :query="agentQuery" :initial-mode="agentInitialMode" @exit="exitAgent" />
+      <AgentView :query="agentQuery" :skill="agentSkill" :initial-mode="agentInitialMode" @exit="exitAgent" />
     </template>
 
     <!-- 插件管理模式 -->

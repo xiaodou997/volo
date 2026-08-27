@@ -114,6 +114,19 @@
           <div class="result-subtitle">查看与继续之前的对话</div>
         </div>
       </template>
+      <!-- @技能名 候选：选中补全输入 -->
+      <template v-else-if="result.type === 'skill-entry'">
+        <div class="result-icon">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/>
+            <path d="M19 15l.9 2.1L22 18l-2.1.9L19 21l-.9-2.1L16 18l2.1-.9z"/>
+          </svg>
+        </div>
+        <div class="result-content">
+          <div class="result-title">@{{ result.skill.name }}</div>
+          <div class="result-subtitle">{{ result.skill.description || '技能' }} · 回车补全后输入问题</div>
+        </div>
+      </template>
       <!-- AI 查询结果 -->
       <template v-else-if="result.type === 'ai'">
         <div class="result-icon">
@@ -123,7 +136,7 @@
           </svg>
         </div>
         <div class="result-content">
-          <div class="result-title">问 AI</div>
+          <div class="result-title">问 AI{{ result.skill ? ` · @${result.skill}` : '' }}</div>
           <div class="result-subtitle">{{ searchStore.llmConfigured ? result.query : '未配置 LLM，回车前往设置' }}</div>
         </div>
       </template>
@@ -164,6 +177,9 @@ function getKey(result: SearchResult, index: number): string {
   }
   if (result.type === 'ai') {
     return `ai-${result.query}`;
+  }
+  if (result.type === 'skill-entry') {
+    return `skill-entry-${result.skill.name}`;
   }
   if (result.type === 'ai-history') {
     return 'ai-history';
