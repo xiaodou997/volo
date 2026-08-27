@@ -324,8 +324,13 @@ impl AgentManager {
 
     /// 尝试开始一轮对话：busy 则报错；否则置 busy、复位取消标志，
     /// 压入 system（首轮，由调用方按当前技能目录组装）+ user 消息后返回本地历史副本
-    /// （此后不再持锁）
-    pub fn begin_turn(&self, query: &str, system_prompt: &str) -> Result<Vec<Message>> {
+    /// （此后不再持锁）。images 为图片附件（data URL），仅本轮 user 消息携带
+    pub fn begin_turn(
+        &self,
+        query: &str,
+        system_prompt: &str,
+        images: Vec<String>,
+    ) -> Result<Vec<Message>> {
         if self.busy.swap(true, Ordering::SeqCst) {
             return Err(VoloError::Other("上一个会话还在进行中".to_string()));
         }
@@ -334,7 +339,11 @@ impl AgentManager {
         if history.is_empty() {
             history.push(Message::system(system_prompt));
         }
-        history.push(Message::user(query));
+        history.push(if images.is_empty() {
+            Message::user(query)
+        } else {
+            Message::user_with_images(query, images)
+        });
         Ok(history.clone())
     }
 
@@ -372,6 +381,7 @@ pub fn agent_ask(
     config: State<'_, Config>,
     query: String,
     skill: Option<String>,
+    images: Option<Vec<String>>,
 ) -> Result<()> {
     let llm = config.get().llm;
     if llm.model.trim().is_empty() {
@@ -407,9 +417,10 @@ pub fn agent_ask(
         let body = super::skill::load_skill_body(&skills_dir, name)?;
         system_prompt = append_explicit_skill(system_prompt, name, &body);
     }
-    let mut messages = manager.begin_turn(&query, &system_prompt)?;
+    let mut messages = manager.begin_turn(&query, &system_prompt, images.clone().unwrap_or_default())?;
     if let Some(log) = session_log.as_mut() {
-        let _ = log.log("user_input", &json!({ "query": query }));
+        let image_count = images.as_ref().map(|v| v.len()).unwrap_or(0);
+        let _ = log.log("user_input", &json!({ "query": query, "imageCount": image_count }));
     }
 
     let app_handle = app.clone();
@@ -991,20 +1002,20 @@ mod tests {
     #[test]
     fn test_begin_turn_busy_guard() {
         let manager = AgentManager::new();
-        let messages = manager.begin_turn("第一个问题", SYSTEM_PROMPT).unwrap();
+        let messages = manager.begin_turn("第一个问题", SYSTEM_PROMPT, Vec::new()).unwrap();
         assert!(manager.is_busy());
         assert_eq!(messages.len(), 2);
         assert_eq!(messages[0].role, "system");
         assert_eq!(messages[1].role, "user");
 
         // 进行中再次 begin_turn 被拒
-        let err = manager.begin_turn("并发问题", SYSTEM_PROMPT).unwrap_err();
+        let err = manager.begin_turn("并发问题", SYSTEM_PROMPT, Vec::new()).unwrap_err();
         assert!(err.to_string().contains("还在进行中"));
 
         // 结束后回写历史，下一轮在同一历史上继续
         manager.finish_turn(messages);
         assert!(!manager.is_busy());
-        let messages = manager.begin_turn("追问", SYSTEM_PROMPT).unwrap();
+        let messages = manager.begin_turn("追问", SYSTEM_PROMPT, Vec::new()).unwrap();
         assert_eq!(messages.len(), 3);
         assert_eq!(messages[2].content.as_deref(), Some("追问"));
     }
@@ -1013,7 +1024,7 @@ mod tests {
     #[test]
     fn test_new_session_clears_history() {
         let manager = AgentManager::new();
-        let messages = manager.begin_turn("旧会话", SYSTEM_PROMPT).unwrap();
+        let messages = manager.begin_turn("旧会话", SYSTEM_PROMPT, Vec::new()).unwrap();
         manager.finish_turn(messages);
         manager.cancel_flag().store(true, Ordering::Relaxed);
 
@@ -1021,7 +1032,7 @@ mod tests {
         assert!(!manager.cancel_flag().load(Ordering::Relaxed));
 
         // 历史已清空：下一轮重新压入 system + user
-        let messages = manager.begin_turn("新会话", SYSTEM_PROMPT).unwrap();
+        let messages = manager.begin_turn("新会话", SYSTEM_PROMPT, Vec::new()).unwrap();
         assert_eq!(messages.len(), 2);
         assert_eq!(messages[0].role, "system");
         manager.finish_turn(messages);
@@ -1069,7 +1080,7 @@ mod tests {
         let manager = AgentManager::new();
 
         // busy 中拒绝载入
-        let inflight = manager.begin_turn("进行中", SYSTEM_PROMPT).unwrap();
+        let inflight = manager.begin_turn("进行中", SYSTEM_PROMPT, Vec::new()).unwrap();
         let restored = vec![
             Message::system(SYSTEM_PROMPT),
             Message::user("旧问题"),
@@ -1084,7 +1095,7 @@ mod tests {
         assert!(!manager.cancel_flag().load(Ordering::Relaxed));
 
         // 续聊：历史含 system，begin_turn 只压新 user
-        let messages = manager.begin_turn("追问", SYSTEM_PROMPT).unwrap();
+        let messages = manager.begin_turn("追问", SYSTEM_PROMPT, Vec::new()).unwrap();
         assert_eq!(messages.len(), 4);
         assert_eq!(messages[0].role, "system");
         assert_eq!(messages[2].content.as_deref(), Some("旧回答"));

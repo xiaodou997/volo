@@ -6,6 +6,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- AI 对话粘贴附件：追问输入框可直接粘贴截图/图片（多模态 vision 格式发送，≤10MB）和文本类文件（txt/md/json 等，内容并入消息正文带文件名标注，≤256KB）；输入栏上方附件 chips 可逐个移除；用户气泡显示图片缩略图与文件徽标；会话日志 user_input 记录 imageCount，回放页显示图片徽标，从回放续聊时历史快照保留图片上下文
+
 ## [1.9.0] - 2026-08-27
 
 AI-native 深化迭代：Skill Runtime（技能系统）全链路、插件热重载、MCP 远程 server 支持，另含 4 个体验修复。

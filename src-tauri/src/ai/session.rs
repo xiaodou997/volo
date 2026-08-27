@@ -128,6 +128,9 @@ pub struct ReplayEvent {
     pub args: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub result: Option<String>,
+    /// user 事件携带的图片附件数（回放显示徽标用；图片本体在 history 快照里）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image_count: Option<u64>,
 }
 
 impl ReplayEvent {
@@ -138,6 +141,7 @@ impl ReplayEvent {
             name: None,
             args: None,
             result: None,
+            image_count: None,
         }
     }
 }
@@ -243,6 +247,7 @@ fn read_session(dir: &Path, session_id: &str) -> Result<Vec<ReplayEvent>> {
             "user_input" => {
                 let mut e = ReplayEvent::new("user");
                 e.content = payload["query"].as_str().map(String::from);
+                e.image_count = payload["imageCount"].as_u64().filter(|n| *n > 0);
                 events.push(e);
             }
             "model_response" => {

@@ -155,6 +155,8 @@ export interface ReplayEvent {
   name?: string;
   args?: unknown;
   result?: string;
+  /** user 事件携带的图片附件数（回放徽标用） */
+  imageCount?: number;
 }
 
 // 文件信息（来自索引）

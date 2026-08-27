@@ -23,6 +23,10 @@ pub struct Message {
     pub tool_calls: Option<Vec<ToolCall>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
+    /// 图片附件（data URL，如 data:image/png;base64,...）。仅 user 消息使用；
+    /// 空数组不序列化，旧会话日志兼容
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<String>,
 }
 
 impl Message {
@@ -32,6 +36,7 @@ impl Message {
             content: Some(content.to_string()),
             tool_calls: None,
             tool_call_id: None,
+            images: Vec::new(),
         }
     }
 
@@ -41,6 +46,15 @@ impl Message {
             content: Some(content.to_string()),
             tool_calls: None,
             tool_call_id: None,
+            images: Vec::new(),
+        }
+    }
+
+    /// 带图片附件的 user 消息（粘贴截图等场景）
+    pub fn user_with_images(content: &str, images: Vec<String>) -> Self {
+        Self {
+            images,
+            ..Self::user(content)
         }
     }
 
@@ -54,6 +68,7 @@ impl Message {
                 Some(tool_calls)
             },
             tool_call_id: None,
+            images: Vec::new(),
         }
     }
 
@@ -63,15 +78,30 @@ impl Message {
             content: Some(content),
             tool_calls: None,
             tool_call_id: Some(tool_call_id),
+            images: Vec::new(),
         }
     }
 
-    /// 转换为 OpenAI wire 格式（tool_calls 的 arguments 需序列化为 JSON 字符串）
+    /// 转换为 OpenAI wire 格式（tool_calls 的 arguments 需序列化为 JSON 字符串；
+    /// user 消息带图片时 content 转多模态 parts 数组，其余情况保持纯文本字段）
     pub fn to_wire(&self) -> Value {
         let mut msg = json!({ "role": self.role });
 
-        // tool 角色必须带 content（哪怕是空串），其余角色 content 为 None 时不带该字段
-        if self.role == "tool" {
+        if self.role == "user" && !self.images.is_empty() {
+            // vision 格式：[{type: text}, {type: image_url}...]
+            let mut parts = vec![json!({
+                "type": "text",
+                "text": self.content.clone().unwrap_or_default(),
+            })];
+            for image in &self.images {
+                parts.push(json!({
+                    "type": "image_url",
+                    "image_url": { "url": image },
+                }));
+            }
+            msg["content"] = Value::Array(parts);
+        } else if self.role == "tool" {
+            // tool 角色必须带 content（哪怕是空串），其余角色 content 为 None 时不带该字段
             msg["content"] = Value::String(self.content.clone().unwrap_or_default());
         } else if let Some(content) = &self.content {
             msg["content"] = Value::String(content.clone());
@@ -447,6 +477,34 @@ impl ChatBackend for OpenAiBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// user 消息带图片时 content 走多模态 parts；不带则保持纯文本字段
+    #[test]
+    fn test_message_wire_format_images() {
+        let msg = Message::user_with_images(
+            "这张图里有什么",
+            vec!["data:image/png;base64,AAAA".to_string()],
+        );
+        let wire = msg.to_wire();
+        assert_eq!(wire["role"], "user");
+        let parts = wire["content"].as_array().expect("应为 parts 数组");
+        assert_eq!(parts[0], json!({ "type": "text", "text": "这张图里有什么" }));
+        assert_eq!(
+            parts[1],
+            json!({ "type": "image_url", "image_url": { "url": "data:image/png;base64,AAAA" } })
+        );
+
+        // 无图片：仍是纯文本 content，wire 格式不变
+        let plain = Message::user("纯文本").to_wire();
+        assert_eq!(plain["content"], Value::String("纯文本".to_string()));
+
+        // serde 兼容：images 空数组不序列化，旧日志（无 images 字段）可正常读回
+        let log_json = serde_json::to_string(&Message::user("x")).unwrap();
+        assert!(!log_json.contains("images"));
+        let old: Message = serde_json::from_str(r#"{"role":"user","content":"旧格式"}"#).unwrap();
+        assert!(old.images.is_empty());
+        assert_eq!(old.content.as_deref(), Some("旧格式"));
+    }
 
     #[test]
     fn test_message_wire_format_tool_calls() {

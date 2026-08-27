@@ -58,7 +58,14 @@
         :class="'timeline-' + item.kind"
       >
         <template v-if="item.kind === 'user'">
-          <div class="user-question item-user">{{ item.text }}</div>
+          <div class="user-question item-user">
+            {{ item.text }}
+            <div v-if="item.images?.length" class="user-attachments">
+              <img v-for="(img, i) in item.images" :key="i" :src="img" class="user-attach-thumb" alt="图片附件" />
+            </div>
+            <span v-else-if="item.imageCount" class="user-attach-badge">🖼 图片 × {{ item.imageCount }}</span>
+            <span v-for="name in item.files" :key="name" class="user-attach-badge">📎 {{ name }}</span>
+          </div>
         </template>
         <template v-else-if="item.kind === 'tool_call'">
           <div class="item-title">🔧 调用 {{ item.text }}</div>
@@ -88,21 +95,36 @@
       >{{ resuming ? '恢复中…' : '继续对话' }}</button>
     </div>
 
-    <!-- 追问输入栏（实时会话结束后才可用） -->
-    <div v-if="viewMode === 'chat' && finished" class="follow-up-bar">
-      <input
-        v-model="followUp"
-        type="text"
-        class="follow-up-input"
-        placeholder="继续追问…"
-        :disabled="!finished"
-        @keydown.enter="sendFollowUp"
-      />
-      <button
-        class="follow-up-send"
-        :disabled="!finished || !followUp.trim()"
-        @click="sendFollowUp"
-      >发送</button>
+    <!-- 追问输入栏（实时会话结束后才可用）；支持粘贴图片 / 文本文件作为附件 -->
+    <div v-if="viewMode === 'chat' && finished" class="follow-up-area">
+      <!-- 待发送附件 -->
+      <div v-if="pendingImages.length || pendingFiles.length" class="attachment-chips">
+        <span v-for="(img, i) in pendingImages" :key="'img' + i" class="chip">
+          <img :src="img" class="chip-thumb" alt="图片附件" />
+          <button class="chip-remove" @click="pendingImages.splice(i, 1)">×</button>
+        </span>
+        <span v-for="(f, i) in pendingFiles" :key="'file' + i" class="chip">
+          📎 {{ f.name }}
+          <button class="chip-remove" @click="pendingFiles.splice(i, 1)">×</button>
+        </span>
+      </div>
+      <div v-if="attachmentError" class="attachment-error">{{ attachmentError }}</div>
+      <div class="follow-up-bar">
+        <input
+          v-model="followUp"
+          type="text"
+          class="follow-up-input"
+          placeholder="继续追问…（可直接粘贴截图 / 文本文件）"
+          :disabled="!finished"
+          @keydown.enter="sendFollowUp"
+          @paste="onPaste"
+        />
+        <button
+          class="follow-up-send"
+          :disabled="!finished || (!followUp.trim() && !pendingImages.length && !pendingFiles.length)"
+          @click="sendFollowUp"
+        >发送</button>
+      </div>
     </div>
   </div>
 </template>
@@ -141,6 +163,10 @@ interface TimelineItem {
   detail?: string;
   // 流式输出进行中（末尾显示闪烁光标）
   streaming?: boolean;
+  // user 项的附件：图片 data URL（实时会话）/ 文件名（文本附件）/ 图片数（回放徽标）
+  images?: string[];
+  files?: string[];
+  imageCount?: number;
 }
 
 // 视图模式：实时会话 / 历史列表 / 历史回放
@@ -158,6 +184,53 @@ const sessions = ref<SessionMeta[]>([]);
 const sessionsLoading = ref(false);
 const sessionsError = ref('');
 const followUp = ref('');
+// 待发送附件（粘贴进输入框的图片 / 文本文件）
+const pendingImages = ref<string[]>([]);
+const pendingFiles = ref<{ name: string; text: string }[]>([]);
+const attachmentError = ref('');
+
+const MAX_IMAGE_SIZE = 10 * 1024 * 1024; // 图片上限 10MB
+const MAX_TEXT_SIZE = 256 * 1024; // 文本附件上限 256KB
+const TEXT_FILE_EXT =
+  /\.(txt|md|markdown|log|json|csv|yaml|yml|xml|html?|js|ts|jsx|tsx|py|rs|sh|c|h|cpp|java|go|css|sql|toml|ini)$/i;
+
+function readAsDataURL(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+}
+
+// 粘贴附件：图片 → data URL 走多模态；文本类文件 → 内容并入消息正文。
+// 剪贴板里没有文件项时不接管，纯文本粘贴走默认行为
+async function onPaste(e: ClipboardEvent) {
+  const files = Array.from(e.clipboardData?.items ?? [])
+    .filter((item) => item.kind === 'file')
+    .map((item) => item.getAsFile())
+    .filter((f): f is File => !!f);
+  if (files.length === 0) return;
+  e.preventDefault();
+
+  for (const file of files) {
+    if (file.type.startsWith('image/')) {
+      if (file.size > MAX_IMAGE_SIZE) {
+        attachmentError.value = `图片超过 ${Math.round(MAX_IMAGE_SIZE / 1024 / 1024)}MB，未添加`;
+        continue;
+      }
+      pendingImages.value.push(await readAsDataURL(file));
+    } else if (file.type.startsWith('text/') || TEXT_FILE_EXT.test(file.name)) {
+      if (file.size > MAX_TEXT_SIZE) {
+        attachmentError.value = `文本文件超过 ${Math.round(MAX_TEXT_SIZE / 1024)}KB，未添加`;
+        continue;
+      }
+      pendingFiles.value.push({ name: file.name || '未命名.txt', text: await file.text() });
+    } else {
+      attachmentError.value = `不支持的文件类型：${file.name || file.type || '未知'}（支持图片和文本类文件）`;
+    }
+  }
+}
 // 停止按钮状态（等待后端 done 事件落地）
 const stopping = ref(false);
 // 从回放继续会话：当前回放的会话 id / 是否已恢复为实时会话 / 恢复中与错误状态
@@ -215,7 +288,7 @@ async function openHistory() {
 function replayToTimeline(event: ReplayEvent): TimelineItem | null {
   switch (event.kind) {
     case 'user':
-      return { kind: 'user', text: event.content ?? '' };
+      return { kind: 'user', text: event.content ?? '', imageCount: event.imageCount };
     case 'message':
       return event.content ? { kind: 'message', text: event.content } : null;
     case 'tool_call':
@@ -291,18 +364,36 @@ async function stopSession() {
   }
 }
 
-// 多轮追问：本地先压入 user 气泡，再发起新一轮 agent_ask
+// 多轮追问：本地先压入 user 气泡（含附件展示），再发起新一轮 agent_ask
 async function sendFollowUp() {
   const q = followUp.value.trim();
-  if (!q || !finished.value) return;
+  const images = [...pendingImages.value];
+  const files = [...pendingFiles.value];
+  if ((!q && !images.length && !files.length) || !finished.value) return;
+
+  // 文本文件内容并入消息正文（带文件名标注），LLM 直接可读；
+  // 图片走多模态 parts 单独传
+  let fullQuery = q;
+  for (const f of files) {
+    fullQuery += `\n\n[附件 ${f.name}]\n\`\`\`\n${f.text}\n\`\`\``;
+  }
+
   followUp.value = '';
-  timeline.value.push({ kind: 'user', text: q });
+  pendingImages.value = [];
+  pendingFiles.value = [];
+  attachmentError.value = '';
+  timeline.value.push({
+    kind: 'user',
+    text: q || '（见附件）',
+    images,
+    files: files.map((f) => f.name),
+  });
   loading.value = true;
   finished.value = false;
   await scrollToBottom();
   try {
     // 追问不带 skill：首轮已注入 system prompt，历史续接即可
-    await invoke('agent_ask', { query: q, skill: null });
+    await invoke('agent_ask', { query: fullQuery, skill: null, images });
   } catch (e) {
     loading.value = false;
     finished.value = true;
@@ -386,7 +477,7 @@ onMounted(async () => {
     return;
   }
   try {
-    await invoke('agent_ask', { query: props.query, skill: props.skill ?? null });
+    await invoke('agent_ask', { query: props.query, skill: props.skill ?? null, images: null });
   } catch (e) {
     loading.value = false;
     finished.value = true;
@@ -721,5 +812,75 @@ onUnmounted(() => {
 
 .resume-btn {
   margin-left: auto;
+}
+
+/* 待发送附件 chips（追问输入栏上方） */
+.attachment-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 10px 16px 0;
+  background: var(--bg-secondary);
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 4px 8px;
+}
+
+.chip-thumb {
+  width: 32px;
+  height: 32px;
+  object-fit: cover;
+  border-radius: 4px;
+}
+
+.chip-remove {
+  border: none;
+  background: none;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 0 2px;
+}
+
+.chip-remove:hover {
+  color: var(--danger-color);
+}
+
+.attachment-error {
+  font-size: 12px;
+  color: var(--danger-color);
+  padding: 6px 16px 0;
+  background: var(--bg-secondary);
+}
+
+/* 用户气泡里的附件展示 */
+.user-attachments {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+  flex-wrap: wrap;
+}
+
+.user-attach-thumb {
+  max-width: 120px;
+  max-height: 120px;
+  border-radius: 6px;
+}
+
+.user-attach-badge {
+  display: inline-block;
+  font-size: 12px;
+  opacity: 0.8;
+  margin-top: 4px;
+  margin-right: 6px;
 }
 </style>
