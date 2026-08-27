@@ -113,11 +113,13 @@ export interface LlmConfig {
   model: string;
 }
 
-// MCP 服务器配置（stdio 本地子进程，向内置 Agent 贡献 LLM 工具，工具名形如 mcp__{server}__{tool}）
+// MCP 服务器配置（stdio 本地子进程或 Streamable HTTP 远程服务，工具名形如 mcp__{server}__{tool}）
 export interface McpServerConfig {
   command: string;
   args: string[];
   env: Record<string, string>;
+  /** 远程 server URL（非空走 Streamable HTTP，忽略 command/args/env） */
+  url?: string;
   enabled: boolean;
 }
 

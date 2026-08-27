@@ -215,7 +215,8 @@
         <h3 class="section-title">MCP 服务器</h3>
 
         <div class="mcp-hint">
-          MCP 服务器是本地启动的外部工具进程，配置即信任——请只添加你信任的 server。修改后下次问 AI 时生效。
+          MCP 服务器可以是本地启动的工具进程（stdio，填命令+参数），也可以是远程服务（Streamable HTTP，填 URL）。
+          配置即信任——请只添加你信任的 server。修改后下次问 AI 时生效。
         </div>
 
         <div v-if="mcpServerNames.length === 0" class="grants-empty">
@@ -252,13 +253,19 @@
             type="text"
             class="text-input"
             v-model="mcpForm.command"
-            placeholder="命令（如 npx）"
+            placeholder="命令（如 npx；填了 URL 可留空）"
           />
           <input
             type="text"
             class="text-input mcp-args-input"
             v-model="mcpForm.args"
             placeholder="参数（空格分隔，可留空）"
+          />
+          <input
+            type="text"
+            class="text-input"
+            v-model="mcpForm.url"
+            placeholder="远程 URL（如 http://localhost:3000/mcp，可留空）"
           />
           <button class="action-btn" @click="addMcpServer">添加</button>
         </div>
@@ -587,7 +594,7 @@ async function saveApiKey() {
 // ============ MCP 服务器 ============
 
 const mcpServers = ref<Record<string, McpServerConfig>>({});
-const mcpForm = ref({ name: '', command: '', args: '' });
+const mcpForm = ref({ name: '', command: '', args: '', url: '' });
 const mcpFormError = ref('');
 
 const mcpServerNames = computed(() => Object.keys(mcpServers.value));
@@ -602,8 +609,11 @@ async function loadMcpServers() {
   }
 }
 
-// 命令 + 参数拼接摘要
+// 摘要：HTTP 显示 URL，stdio 显示命令 + 参数
 function mcpSummary(server: McpServerConfig): string {
+  if (server.url?.trim()) {
+    return `HTTP · ${server.url}`;
+  }
   return [server.command, ...(server.args ?? [])].join(' ');
 }
 
@@ -625,6 +635,7 @@ function addMcpServer() {
   const name = mcpForm.value.name.trim();
   const command = mcpForm.value.command.trim();
   const args = mcpForm.value.args.split(/\s+/).filter(Boolean);
+  const url = mcpForm.value.url.trim();
 
   if (!name) {
     mcpFormError.value = '名称不能为空';
@@ -634,17 +645,21 @@ function addMcpServer() {
     mcpFormError.value = `已存在同名服务器「${name}」`;
     return;
   }
-  if (!command) {
-    mcpFormError.value = '命令不能为空';
+  if (!command && !url) {
+    mcpFormError.value = '命令和 URL 至少填一个（URL 非空走远程 HTTP）';
+    return;
+  }
+  if (url && !/^https?:\/\//.test(url)) {
+    mcpFormError.value = 'URL 需以 http:// 或 https:// 开头';
     return;
   }
 
   mcpFormError.value = '';
   mcpServers.value = {
     ...mcpServers.value,
-    [name]: { command, args, env: {}, enabled: true },
+    [name]: { command, args, env: {}, url, enabled: true },
   };
-  mcpForm.value = { name: '', command: '', args: '' };
+  mcpForm.value = { name: '', command: '', args: '', url: '' };
   saveMcpServers();
 }
 

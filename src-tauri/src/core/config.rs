@@ -33,11 +33,11 @@ pub struct AppConfig {
     pub mcp_servers: HashMap<String, McpServerConfig>,
 }
 
-/// MCP stdio server 启动配置
+/// MCP server 配置：url 非空 = 远程 Streamable HTTP server；否则 = stdio 本地子进程
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct McpServerConfig {
-    /// 启动命令（如 npx、python、某个二进制路径）
+    /// 启动命令（如 npx、python、某个二进制路径）；url 非空时忽略
     pub command: String,
     /// 命令参数
     #[serde(default)]
@@ -45,6 +45,10 @@ pub struct McpServerConfig {
     /// 附加环境变量
     #[serde(default)]
     pub env: HashMap<String, String>,
+    /// 远程 server 的 URL（Streamable HTTP transport，单 endpoint POST JSON-RPC）；
+    /// 为空则按 stdio 本地子进程处理
+    #[serde(default)]
+    pub url: String,
     /// 是否启用（缺省启用）
     #[serde(default = "default_true")]
     pub enabled: bool,
@@ -301,6 +305,7 @@ mod tests {
                 command: "npx".to_string(),
                 args: vec!["-y".to_string(), "echo-server".to_string()],
                 env: HashMap::from([("KEY".to_string(), "VALUE".to_string())]),
+                url: String::new(),
                 enabled: true,
             },
         );

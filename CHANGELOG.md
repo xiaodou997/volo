@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 内置技能播种：启动时把打包的示范技能拷入应用技能目录（参照插件播种：已安装且版本一致的跳过、用户改过的正文不被覆盖，版本升级或副本损坏时覆盖重播）；skills/ 纳入打包资源
 - `@技能名` 显式触发技能：搜索框输入 `@` 列出技能候选（回车补全输入），`@技能名 问题` 直达"问 AI"并跳过渐进披露——技能正文直接注入 system prompt 严格执行；Agent 页标题显示 `问 AI · @技能名`；技能不存在时报错不静默降级
 - 插件热重载：监听插件目录文件变化（notify watcher + 500ms 防抖），自动重扫插件并广播 `plugins-changed`；打开中的插件视图强制重建（重新拉取 HTML 并重发 onPluginEnter），插件管理器列表自动刷新；目录安装插件后无需重启即可搜索到
+- MCP Streamable HTTP transport：MCP server 配置新增 `url` 字段——非空走远程 HTTP（单 endpoint POST JSON-RPC，JSON / SSE 两种响应都支持，自动回带 Mcp-Session-Id），为空保持 stdio 本地子进程，老配置完全兼容；设置页表单可加远程 server（URL 校验）
 
 ### Fixed
 - 修复设置项"失焦时隐藏"（hideOnBlur）保存后不生效的问题：失焦隐藏逻辑接入共享配置（App 启动时加载、设置保存后实时同步，无需重启）
