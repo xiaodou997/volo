@@ -73,15 +73,37 @@
         </template>
         <template v-else-if="item.kind === 'tool_result'">
           <div class="item-detail">{{ item.text }}</div>
+          <!-- 显示的是截断版，复制取完整结果 -->
+          <button
+            class="msg-action-btn tool-copy-btn"
+            @click="copyMessage('tool-' + index, item.fullText ?? item.text)"
+          >{{ copiedKey === 'tool-' + index ? '已复制 ✓' : '复制结果' }}</button>
         </template>
         <template v-else>
           <div class="item-body markdown-body" v-html="renderMarkdown(item.text)"></div>
           <span v-if="item.streaming" class="stream-cursor"></span>
-          <button
+          <!-- 回答操作：引用追问（仅实时会话结束后可用）/ 复制整条 -->
+          <div
             v-if="item.kind === 'message' && !item.streaming && item.text"
-            class="msg-copy-btn"
-            @click="copyMessage(index, item.text)"
-          >{{ copiedIndex === index ? '已复制 ✓' : '复制' }}</button>
+            class="msg-actions"
+          >
+            <button
+              v-if="viewMode === 'chat' && finished"
+              class="msg-action-btn"
+              @click="quoteMessage(item.text)"
+            >引用</button>
+            <button
+              class="msg-action-btn"
+              @click="copyMessage('msg-' + index, item.text)"
+            >{{ copiedKey === 'msg-' + index ? '已复制 ✓' : '复制' }}</button>
+          </div>
+          <!-- 失败重试：以最后一次提问参数重新发起会话 -->
+          <button
+            v-if="item.kind === 'error' && viewMode === 'chat' && finished && lastAsk"
+            class="msg-action-btn retry-btn"
+            :disabled="retrying"
+            @click="retryLastAsk"
+          >{{ retrying ? '重试中…' : '重试' }}</button>
         </template>
       </div>
 
@@ -116,6 +138,7 @@
       <div v-if="attachmentError" class="attachment-error">{{ attachmentError }}</div>
       <div class="follow-up-bar">
         <input
+          ref="followUpInputRef"
           v-model="followUp"
           type="text"
           class="follow-up-input"
@@ -166,6 +189,8 @@ interface TimelineItem {
   kind: 'user' | 'message' | 'tool_call' | 'tool_result' | 'error';
   text: string;
   detail?: string;
+  // 工具结果的完整内容（text 是截断显示版，复制时取完整版）
+  fullText?: string;
   // 流式输出进行中（末尾显示闪烁光标）
   streaming?: boolean;
   // user 项的附件：图片 data URL（实时会话）/ 文件名（文本附件）/ 图片数（回放徽标）
@@ -303,7 +328,11 @@ function replayToTimeline(event: ReplayEvent): TimelineItem | null {
         detail: truncate(JSON.stringify(event.args ?? {}), 100),
       };
     case 'tool_result':
-      return { kind: 'tool_result', text: truncate(event.result ?? '', 200) };
+      return {
+        kind: 'tool_result',
+        text: truncate(event.result ?? '', 200),
+        fullText: event.result ?? '',
+      };
     case 'error':
       return { kind: 'error', text: event.content ?? '未知错误' };
   }
@@ -388,6 +417,7 @@ async function sendFollowUp() {
   pendingImages.value = [];
   pendingFiles.value = [];
   attachmentError.value = '';
+  lastAsk.value = { query: fullQuery, skill: null, images: images.length ? images : null };
   timeline.value.push({
     kind: 'user',
     text: q || '（见附件）',
@@ -418,18 +448,56 @@ async function scrollToBottom() {
   }
 }
 
-// 复制整条回答（按钮悬停气泡右上角显示）
-const copiedIndex = ref(-1);
+// 复制反馈：key 区分消息/工具结果等不同来源的按钮
+const copiedKey = ref('');
 
-async function copyMessage(index: number, text: string) {
+async function copyMessage(key: string, text: string) {
   try {
     await navigator.clipboard.writeText(text);
-    copiedIndex.value = index;
+    copiedKey.value = key;
     setTimeout(() => {
-      if (copiedIndex.value === index) copiedIndex.value = -1;
+      if (copiedKey.value === key) copiedKey.value = '';
     }, 1500);
   } catch (e) {
     console.warn('复制失败', e);
+  }
+}
+
+// 引用追问：把回答原文以 Markdown 引用块填入追问输入框并聚焦
+const followUpInputRef = ref<HTMLInputElement | null>(null);
+
+function quoteMessage(text: string) {
+  const quote =
+    text
+      .split('\n')
+      .map((line) => '> ' + line)
+      .join('\n') + '\n\n';
+  followUp.value = quote + followUp.value;
+  void nextTick(() => followUpInputRef.value?.focus());
+}
+
+// 失败重试：记录最后一次提问参数（首轮带 skill，追问不带）
+const lastAsk = ref<{ query: string; skill: string | null; images: string[] | null } | null>(null);
+const retrying = ref(false);
+
+async function retryLastAsk() {
+  if (!lastAsk.value || retrying.value) return;
+  retrying.value = true;
+  // 移除末尾连续的 error 项，避免重试时错误堆叠
+  while (timeline.value.length && timeline.value[timeline.value.length - 1].kind === 'error') {
+    timeline.value.pop();
+  }
+  loading.value = true;
+  finished.value = false;
+  await scrollToBottom();
+  try {
+    await invoke('agent_ask', lastAsk.value);
+  } catch (e) {
+    loading.value = false;
+    finished.value = true;
+    timeline.value.push({ kind: 'error', text: String(e) });
+  } finally {
+    retrying.value = false;
   }
 }
 
@@ -500,6 +568,7 @@ async function handleEvent(event: AgentEvent) {
       timeline.value.push({
         kind: 'tool_result',
         text: truncate(event.result ?? '', 200),
+        fullText: event.result ?? '',
       });
       break;
     case 'error':
@@ -531,7 +600,8 @@ onMounted(async () => {
     return;
   }
   try {
-    await invoke('agent_ask', { query: props.query, skill: props.skill ?? null, images: null });
+    lastAsk.value = { query: props.query, skill: props.skill ?? null, images: null };
+    await invoke('agent_ask', lastAsk.value);
   } catch (e) {
     loading.value = false;
     finished.value = true;
@@ -718,15 +788,26 @@ onUnmounted(() => {
   opacity: 1;
 }
 
-/* 整条回答的复制按钮（悬停气泡时显示在右上角） */
+/* 整条回答的操作按钮组（悬停气泡时显示在右上角） */
 .timeline-message {
   position: relative;
 }
 
-.msg-copy-btn {
+.msg-actions {
   position: absolute;
   top: 6px;
   right: 0;
+  display: flex;
+  gap: 6px;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.timeline-message:hover .msg-actions {
+  opacity: 1;
+}
+
+.msg-action-btn {
   font-size: 12px;
   border: 1px solid var(--border-color);
   background: var(--bg-secondary);
@@ -734,12 +815,33 @@ onUnmounted(() => {
   border-radius: 4px;
   padding: 2px 8px;
   cursor: pointer;
+}
+
+.msg-action-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* 工具结果复制按钮（悬停时显示在右上角） */
+.timeline-tool_result {
+  position: relative;
+}
+
+.tool-copy-btn {
+  position: absolute;
+  top: 8px;
+  right: 0;
   opacity: 0;
   transition: opacity 0.15s;
 }
 
-.timeline-message:hover .msg-copy-btn {
+.timeline-tool_result:hover .tool-copy-btn {
   opacity: 1;
+}
+
+/* 失败重试按钮（常显，跟在错误文本后） */
+.retry-btn {
+  margin-top: 6px;
 }
 
 .markdown-body :deep(blockquote) {
