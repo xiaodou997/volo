@@ -5,7 +5,9 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use tauri::{AppHandle, Manager};
+use std::time::Duration;
+use notify::{RecursiveMode, Watcher};
+use tauri::{AppHandle, Emitter, Manager};
 use tracing::{info, warn};
 use crate::error::{Result, VoloError};
 use crate::search::FeatureInfo;
@@ -112,6 +114,8 @@ impl From<Feature> for FeatureInfo {
 pub struct PluginState {
     pub plugins: Mutex<HashMap<String, Plugin>>,
     pub plugins_dir: PathBuf,
+    /// 热重载 watcher（仅保活，drop 即停止监听；事件经 start_hot_reload 的防抖线程处理）
+    _watcher: Mutex<Option<notify::RecommendedWatcher>>,
 }
 
 impl PluginState {
@@ -123,6 +127,7 @@ impl PluginState {
         let state = Self {
             plugins: Mutex::new(HashMap::new()),
             plugins_dir,
+            _watcher: Mutex::new(None),
         };
 
         // 播种内置插件（已安装且版本一致的跳过，版本变化时覆盖更新）
@@ -206,6 +211,59 @@ impl PluginState {
 
         info!("Loaded {} plugins", plugins.len());
         Ok(())
+    }
+
+    /// 启动插件目录热重载监听（须在 manage 之后调用，回调里经 app.state 取回自身）。
+    /// 文件变化后防抖 500ms 重扫插件并广播 plugins-changed，前端据此重载打开中的插件视图。
+    /// 监听启动失败只告警不阻断（热重载为体验优化，不是硬依赖）
+    pub fn start_hot_reload(&self, app: &AppHandle) {
+        let dir = self.plugins_dir.clone();
+        let (tx, rx) = std::sync::mpsc::channel::<()>();
+
+        let mut watcher = match notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
+            if res.is_ok() {
+                let _ = tx.send(());
+            }
+        }) {
+            Ok(w) => w,
+            Err(e) => {
+                warn!("Failed to create plugin watcher: {}", e);
+                return;
+            }
+        };
+        if let Err(e) = watcher.watch(&dir, RecursiveMode::Recursive) {
+            warn!("Failed to watch plugins dir {:?}: {}", dir, e);
+            return;
+        }
+
+        // 防抖线程：首个事件到达后，等 500ms 静默窗口再重扫 + 广播。
+        // watcher drop 时发送端断开，recv 报错退出循环，线程自然结束
+        let app_handle = app.clone();
+        std::thread::spawn(move || {
+            while rx.recv().is_ok() {
+                while rx.recv_timeout(Duration::from_millis(500)).is_ok() {}
+                let state = app_handle.state::<PluginState>();
+                match state.scan_plugins() {
+                    Ok(()) => {
+                        info!("Plugins reloaded after fs change");
+                        let _ = app_handle.emit("plugins-changed", ());
+                    }
+                    Err(e) => warn!("Rescan plugins after fs change failed: {}", e),
+                }
+            }
+        });
+
+        *self._watcher.lock().unwrap() = Some(watcher);
+    }
+
+    /// 测试用构造：不启动 watcher，plugins_dir 为空路径
+    #[cfg(test)]
+    pub(crate) fn for_test(plugins: Vec<Plugin>) -> Self {
+        Self {
+            plugins: Mutex::new(plugins.into_iter().map(|p| (p.id.clone(), p)).collect()),
+            plugins_dir: PathBuf::new(),
+            _watcher: Mutex::new(None),
+        }
     }
 
     /// 获取插件

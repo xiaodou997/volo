@@ -328,12 +328,7 @@ mod tests {
     }
 
     fn make_plugin_state(plugins: Vec<Plugin>) -> PluginState {
-        PluginState {
-            plugins: Mutex::new(
-                plugins.into_iter().map(|p| (p.id.clone(), p)).collect(),
-            ),
-            plugins_dir: PathBuf::new(),
-        }
+        PluginState::for_test(plugins)
     }
 
     // ---- 命名空间清洗 / 反解 ----

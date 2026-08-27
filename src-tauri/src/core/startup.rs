@@ -166,6 +166,9 @@ impl StartupManager {
         })??;
         app.manage(plugin_state);
 
+        // 插件热重载：监听插件目录变化，防抖后重扫并广播 plugins-changed
+        app.state::<PluginState>().start_hot_reload(app);
+
         // 技能播种失败（如线程 panic）不阻断启动
         let _ = skill_task.await;
 

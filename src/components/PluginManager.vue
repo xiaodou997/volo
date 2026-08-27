@@ -92,8 +92,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue';
+import { ref, onMounted, onUnmounted } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
+import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { withNativeDialog } from '../composables/nativeDialog';
 
 const emit = defineEmits<{
@@ -182,8 +183,18 @@ async function selectPluginDir() {
   }
 }
 
-onMounted(() => {
+let unlistenPluginsChanged: UnlistenFn | null = null;
+
+onMounted(async () => {
   loadPlugins();
+  // 插件热重载：目录变化（含外部编辑插件代码、目录安装）后自动刷新列表
+  unlistenPluginsChanged = await listen('plugins-changed', () => {
+    void loadPlugins();
+  });
+});
+
+onUnmounted(() => {
+  unlistenPluginsChanged?.();
 });
 </script>
 

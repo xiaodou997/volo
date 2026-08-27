@@ -5,6 +5,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, nextTick, watch } from 'vue';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { check } from '@tauri-apps/plugin-updater';
 import SearchInput from './components/SearchInput.vue';
@@ -38,6 +39,8 @@ const agentInitialMode = ref<'chat' | 'history'>('chat');
 const agentSkill = ref<string | undefined>(undefined);
 const currentPlugin = ref<{ pluginId: string; featureId: string } | null>(null);
 const pluginViewRef = ref<InstanceType<typeof PluginView> | null>(null);
+// 插件热重载：plugins-changed 事件到达时 +1，强制 PluginView 重建（重新拉取 HTML 并重发 onPluginEnter）
+const pluginReloadKey = ref(0);
 
 // 子输入框状态
 const subInputVisible = ref(false);
@@ -428,6 +431,14 @@ onMounted(async () => {
   void initToolRunner();
   // 加载失焦隐藏等共享配置
   void loadAppConfig();
+  // 插件热重载：打开中的插件视图强制重建；否则刷新搜索结果（manifest/关键字可能变了）
+  const unlistenPluginsChanged = await listen('plugins-changed', () => {
+    if (pluginMode.value && currentPlugin.value) {
+      pluginReloadKey.value++;
+    } else if (!settingsMode.value && !pluginManagerMode.value && !agentMode.value) {
+      searchStore.search(searchStore.query);
+    }
+  });
   const unlisten = await mainWindow.onFocusChanged(({ payload }: { payload: boolean }) => {
     if (!payload && hideOnBlur.value && !nativeDialogOpen.value && !settingsMode.value && !pluginManagerMode.value && !pluginMode.value && !agentMode.value) {
       // 失焦时隐藏（用户可在设置中关闭；排除原生对话框打开中、设置模式、插件管理模式、插件模式和 Agent 模式）
@@ -442,6 +453,7 @@ onMounted(async () => {
   // 清理
   return () => {
     unlisten();
+    unlistenPluginsChanged();
   };
 });
 </script>
@@ -498,6 +510,7 @@ onMounted(async () => {
 
       <PluginView
         ref="pluginViewRef"
+        :key="pluginReloadKey"
         :plugin-id="currentPlugin.pluginId"
         :feature-id="currentPlugin.featureId"
         :query="searchStore.query"
