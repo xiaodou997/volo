@@ -43,7 +43,7 @@ struct ScoredApp {
 }
 
 /// 计算匹配评分
-fn calculate_score(app: &AppInfo, query: &str, usage_count: u32) -> f64 {
+fn calculate_score(app: &AppInfo, query: &str, frecency: f64) -> f64 {
     let query_lower = query.to_lowercase();
     let name_lower = app.name.to_lowercase();
     let mut score = 0.0;
@@ -75,9 +75,8 @@ fn calculate_score(app: &AppInfo, query: &str, usage_count: u32) -> f64 {
         }
     }
 
-    // 使用频率加成（最多加 20 分）
-    let usage_bonus = (usage_count as f64).min(20.0);
-    score += usage_bonus;
+    // frecency 加成（频率封顶 20 + 近期使用最多 10）
+    score += frecency;
 
     score
 }
@@ -137,8 +136,8 @@ pub fn search_apps(apps: &[AppInfo], query: &str, history: &SearchHistoryManager
             false
         })
         .map(|app| {
-            let usage_count = history.get_usage_count(&app.path);
-            let score = calculate_score(app, query, usage_count);
+            let frecency = history.get_frecency(&app.path);
+            let score = calculate_score(app, query, frecency);
             ScoredApp { app: app.clone(), score }
         })
         .collect();
@@ -166,9 +165,9 @@ pub fn search(
         results.push(SearchResult::App(app));
     }
 
-    // 搜索插件（功能与命令）
+    // 搜索插件（功能与命令，按匹配分 + frecency 排序）
     let plugins = plugin_state.get_all_plugins();
-    for plugin_result in search_plugins(&plugins, &query) {
+    for plugin_result in search_plugins(&plugins, &query, history.inner()) {
         match plugin_result {
             PluginSearchResult::Feature { plugin, feature } => {
                 results.push(SearchResult::Plugin { plugin, feature });

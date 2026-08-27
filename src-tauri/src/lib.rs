@@ -115,7 +115,7 @@ pub fn run() {
             search::app_cache::refresh_app_cache,
             search::app_cache::get_app_count,
             search::app_cache::get_app_icon,
-            search::history::record_app_usage,
+            search::history::record_item_usage,
             search::history::get_search_history,
             search::history::clear_search_history,
             // 文件索引（新的优化版本）

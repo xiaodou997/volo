@@ -166,8 +166,8 @@ function handleClear() {
     }
 
     if (result.type === 'app') {
-      // 记录使用历史
-      invoke('record_app_usage', { appPath: result.path }).catch(() => {});
+      // 记录使用历史（frecency 排序用）
+      invoke('record_item_usage', { key: result.path }).catch(() => {});
 
       // 打开应用
       await invoke('shell_open_path', { path: result.path });
@@ -177,9 +177,13 @@ function handleClear() {
       searchStore.clearSearch();
       updateWindowSize();
     } else if (result.type === 'plugin') {
+      // 记录使用历史：插件功能 key 为 pluginId#featureId
+      invoke('record_item_usage', { key: `${result.plugin.id}#${result.feature.id}` }).catch(() => {});
       // 进入插件模式
       enterPlugin(result.plugin.id, result.feature.id);
     } else if (result.type === 'command') {
+      // 记录使用历史：命令 key 为 pluginId#commandId（list 与 run 都记）
+      invoke('record_item_usage', { key: `${result.plugin.id}#${result.command.id}` }).catch(() => {});
       if (result.command.mode === 'list') {
         // list 模式命令：不隐藏窗口，进入 list 命令模式
         void enterListCommand(result.plugin.id, result.command.id);
