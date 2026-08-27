@@ -375,6 +375,7 @@ import { check, type Update } from '@tauri-apps/plugin-updater';
 import { relaunch } from '@tauri-apps/plugin-process';
 import { useSearchStore } from '../stores/search';
 import { withNativeDialog } from '../composables/nativeDialog';
+import { hideOnBlur } from '../composables/appConfig';
 import type { LlmConfig, McpServerConfig, PermissionGrant, PermissionScope, RiskLevel, SkillMeta } from '../api/rubick';
 import logoUrl from '../assets/logo.png';
 
@@ -412,6 +413,8 @@ async function loadSettings() {
 async function saveSettings() {
   try {
     await invoke('save_config', { newConfig: settings.value });
+    // 同步共享配置（App.vue 失焦隐藏逻辑实时生效，无需重启）
+    hideOnBlur.value = settings.value.hideOnBlur;
   } catch (e) {
     console.error('Failed to save settings:', e);
   }
