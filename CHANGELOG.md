@@ -6,6 +6,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.9.0] - 2026-08-27
+
+AI-native 深化迭代：Skill Runtime（技能系统）全链路、插件热重载、MCP 远程 server 支持，另含 4 个体验修复。
+
 ### Added
 - 应用图标与 logo（V 形飞燕设计，全平台图标集）
 - 设置项"Dock 图标"：可关闭 Dock 栏图标只保留菜单栏托盘（macOS，切换 ActivationPolicy 立即生效）
