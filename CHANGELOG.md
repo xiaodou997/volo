@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 启动器空输入直达入口：搜索框为空时显示"AI 会话历史"，回车直接打开历史列表（可回放、继续对话），无需先发问
 - List mode 二级动作面板：列表项可声明 `actions`（`[{id, title, description?, icon?}]`），Tab/→ 展开动作面板、←/Esc 收起（重触发 onRun 恢复列表）、Enter 仍是 onSelect 默认动作；插件侧新增 `rubick.command.onAction(cb)`（回传 itemId + actionId）；uuid-gen 1.3.0 示范接入
 - Skill Runtime（技能系统）：技能 = 含 SKILL.md 的目录（frontmatter 声明 name/description/version + Markdown 指令正文）；Agent system prompt 按渐进披露只列技能目录，模型匹配意图后经内置工具 `skill_load`（Low 风险）加载完整指令执行；设置页"技能"区块（目录安装/列表/删除/打开目录）；附 weekly-report、translate-polish 两个示范技能
+- 内置技能播种：启动时把打包的示范技能拷入应用技能目录（参照插件播种：已安装且版本一致的跳过、用户改过的正文不被覆盖，版本升级或副本损坏时覆盖重播）；skills/ 纳入打包资源
 
 ### Fixed
 - 修复设置页"关于与更新"区块使用字母 V 占位而非真实 logo 的问题

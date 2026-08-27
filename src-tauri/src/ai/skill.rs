@@ -151,6 +151,85 @@ fn remove_skill(skills_dir: &Path, name: &str) -> Result<()> {
     Err(VoloError::NotFound(format!("skill: {}", name)))
 }
 
+// ============ 内置技能播种 ============
+
+/// 定位打包的内置技能目录（生产：resource_dir/skills；dev：仓库根 skills/）
+fn builtin_skills_dir(app: &AppHandle) -> Option<PathBuf> {
+    if let Ok(dir) = app.path().resource_dir() {
+        let bundled = dir.join("skills");
+        if bundled.exists() {
+            return Some(bundled);
+        }
+    }
+    let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../skills");
+    if dev.exists() {
+        Some(dev)
+    } else {
+        None
+    }
+}
+
+/// 判断内置技能是否需要（重新）播种：
+/// 目标目录不存在、已安装副本损坏、或已安装版本与内置版本不一致时返回 true
+fn should_reseed_skill(target: &Path, bundled_version: &str) -> bool {
+    if !target.exists() {
+        return true;
+    }
+    match read_skill(target) {
+        Some((installed, _)) => installed.version != bundled_version,
+        None => true,
+    }
+}
+
+/// 把 source 下的内置技能播种到技能目录（版本一致则跳过）。失败只告警不阻断
+fn seed_from_dir(source: &Path, skills_dir: &Path) {
+    let entries = match fs::read_dir(source) {
+        Ok(entries) => entries,
+        Err(e) => {
+            tracing::warn!("Failed to read builtin skills dir {:?}: {}", source, e);
+            return;
+        }
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let Some((meta, _)) = read_skill(&path) else {
+            continue;
+        };
+        let target = skills_dir.join(&meta.name);
+        if !should_reseed_skill(&target, &meta.version) {
+            continue;
+        }
+        if target.exists() {
+            if let Err(e) = fs::remove_dir_all(&target) {
+                tracing::warn!("Failed to remove outdated builtin skill {}: {}", meta.name, e);
+                continue;
+            }
+        }
+        match copy_dir_all(&path, &target) {
+            Ok(()) => tracing::info!("Seeded builtin skill: {} (v{})", meta.name, meta.version),
+            Err(e) => tracing::warn!("Failed to seed builtin skill {}: {}", meta.name, e),
+        }
+    }
+}
+
+/// 启动时播种内置技能（参照插件播种：已安装且版本一致的跳过，版本变化时覆盖更新）
+pub fn seed_builtin_skills(app: &AppHandle) {
+    let Some(source) = builtin_skills_dir(app) else {
+        return;
+    };
+    let Ok(dir) = skills_dir(app) else {
+        return;
+    };
+    if let Err(e) = fs::create_dir_all(&dir) {
+        tracing::warn!("Failed to create skills dir {:?}: {}", dir, e);
+        return;
+    }
+    seed_from_dir(&source, &dir);
+}
+
 // ============ Tauri Commands ============
 
 /// 列出已安装技能（设置页用）
@@ -280,5 +359,57 @@ mod tests {
 
         fs::remove_dir_all(&skills).ok();
         fs::remove_dir_all(&source).ok();
+    }
+
+    #[test]
+    fn test_seed_from_dir() {
+        let bundled = temp_skills_dir("seed-source");
+        let skills = temp_skills_dir("seed-target");
+        write_skill(&bundled, "weekly-report", VALID);
+
+        // 首次播种
+        seed_from_dir(&bundled, &skills);
+        assert_eq!(scan_skills(&skills).len(), 1);
+
+        // 版本一致：跳过（手动改过的正文不被覆盖）
+        fs::write(
+            skills.join("weekly-report/SKILL.md"),
+            "---\nname: weekly-report\nversion: 1.0.0\n---\n用户改过的正文",
+        )
+        .unwrap();
+        seed_from_dir(&bundled, &skills);
+        assert_eq!(
+            load_skill_body(&skills, "weekly-report").unwrap(),
+            "用户改过的正文"
+        );
+
+        // 内置版本升级：覆盖重播
+        write_skill(
+            &bundled,
+            "weekly-report",
+            "---\nname: weekly-report\nversion: 1.1.0\n---\n新版正文",
+        );
+        seed_from_dir(&bundled, &skills);
+        assert_eq!(
+            load_skill_body(&skills, "weekly-report").unwrap(),
+            "新版正文"
+        );
+
+        // 已安装副本损坏：重播修复
+        fs::write(skills.join("weekly-report/SKILL.md"), "损坏").unwrap();
+        seed_from_dir(&bundled, &skills);
+        assert_eq!(
+            load_skill_body(&skills, "weekly-report").unwrap(),
+            "新版正文"
+        );
+
+        // 坏的内置目录跳过、散文件忽略
+        write_skill(&bundled, "bad", "no frontmatter");
+        fs::write(bundled.join("loose.md"), VALID).unwrap();
+        seed_from_dir(&bundled, &skills);
+        assert_eq!(scan_skills(&skills).len(), 1);
+
+        fs::remove_dir_all(&bundled).ok();
+        fs::remove_dir_all(&skills).ok();
     }
 }

@@ -139,6 +139,12 @@ impl StartupManager {
             PluginState::new(&app_handle2)
         });
 
+        let app_handle4 = app.clone();
+        let skill_task = tokio::task::spawn_blocking(move || {
+            // 播种内置技能（失败只告警，不阻断启动）
+            crate::ai::skill::seed_builtin_skills(&app_handle4);
+        });
+
         // 等待所有任务完成
         let cache = cache_task.await.map_err(|e| {
             crate::error::VoloError::Other(format!("Cache init failed: {}", e))
@@ -159,6 +165,9 @@ impl StartupManager {
             crate::error::VoloError::Other(format!("Plugin state init failed: {}", e))
         })??;
         app.manage(plugin_state);
+
+        // 技能播种失败（如线程 panic）不阻断启动
+        let _ = skill_task.await;
 
         Ok(())
     }
