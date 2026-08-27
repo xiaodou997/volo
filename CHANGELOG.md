@@ -6,6 +6,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.10.0] - 2026-08-27
+
+体验打磨迭代：AI 对话上下文与可操作性、搜索排序 frecency。
+
 ### Added
 - AI 对话粘贴附件：追问输入框可直接粘贴截图/图片（多模态 vision 格式发送，≤10MB）和文本类文件（txt/md/json 等，内容并入消息正文带文件名标注，≤256KB）；输入栏上方附件 chips 可逐个移除；用户气泡显示图片缩略图与文件徽标；会话日志 user_input 记录 imageCount，回放页显示图片徽标，从回放续聊时历史快照保留图片上下文
 - AI 回答可行动化：代码块悬停显示"复制"按钮（JS 注入，流式输出期间每次渲染后自动重新增强）；整条回答悬停气泡右上角一键复制（按钮 1.5s 反馈"已复制"）；回放页同样生效
