@@ -91,8 +91,8 @@
     "shortDescription": "Volo - 桌面效率工具箱",
     "longDescription": "Volo 是一个桌面效率工具箱，提供快速搜索、插件系统、剪贴板历史等功能，帮助您提升工作效率。",
     "publisher": "Volo Team",
-    "copyright": "Copyright (c) 2024 Volo Team",
-    "homepage": "https://github.com/volo-app/volo",
+    "copyright": "Copyright (c) 2024-2026 Volo Team",
+    "homepage": "https://github.com/xiaodou997/volo",
     "licenseFile": "../LICENSE"
   },
   "plugins": {
