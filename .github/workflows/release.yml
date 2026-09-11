@@ -40,6 +40,9 @@ jobs:
       - name: Build frontend
         run: pnpm run build
 
+      - name: Run frontend security tests
+        run: pnpm test:frontend
+
       - name: Run Rust tests
         working-directory: src-tauri
         run: cargo test --all-features
