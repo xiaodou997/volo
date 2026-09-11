@@ -27,7 +27,7 @@ pub struct CapabilityMeta {
 
 /// 查询 capability 的元数据；未知 capability 默认 Medium
 pub fn capability_meta(capability: &str) -> CapabilityMeta {
-    // 忽略 scope 后缀（如 "fs.read:/path"）
+    // 忽略 scope 后缀（如 "fs.read:/path"、"mcp.call:mcp__server__tool"）
     let base = capability.split(':').next().unwrap_or(capability);
 
     match base {
@@ -76,6 +76,11 @@ pub fn capability_meta(capability: &str) -> CapabilityMeta {
             risk: RiskLevel::Medium,
             description: "打开链接或文件",
         },
+        "mcp.call" => CapabilityMeta {
+            id: "mcp.call",
+            risk: RiskLevel::Medium,
+            description: "调用 MCP 工具",
+        },
         "fs.write" => CapabilityMeta {
             id: "fs.write",
             risk: RiskLevel::High,
@@ -122,6 +127,7 @@ mod tests {
         assert_eq!(capability_meta("screen.capture").risk, RiskLevel::Medium);
         assert_eq!(capability_meta("fs.read").risk, RiskLevel::Medium);
         assert_eq!(capability_meta("shell.open").risk, RiskLevel::Medium);
+        assert_eq!(capability_meta("mcp.call:mcp__server__tool").risk, RiskLevel::Medium);
 
         assert_eq!(capability_meta("fs.write").risk, RiskLevel::High);
         assert_eq!(capability_meta("shell.execute").risk, RiskLevel::High);
