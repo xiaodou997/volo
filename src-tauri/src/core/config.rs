@@ -3,7 +3,7 @@
 use crate::error::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use tauri::AppHandle;
 use tauri::Manager;
@@ -109,6 +109,61 @@ pub enum Theme {
     Dark,
 }
 
+#[cfg(unix)]
+fn harden_config_dir(path: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn harden_config_dir(_path: &Path) -> Result<()> {
+    Ok(())
+}
+
+#[cfg(unix)]
+fn harden_config_file(path: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    if path.exists() {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn harden_config_file(_path: &Path) -> Result<()> {
+    Ok(())
+}
+
+/// 写入包含凭证的配置文件。
+/// Unix/macOS 下强制使用 0600，避免 API key / MCP env 因默认 umask 生成可被其他本机用户读取的文件。
+fn write_private_config(path: &Path, content: &str) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)?;
+        file.write_all(content.as_bytes())?;
+        file.sync_all()?;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+        return Ok(());
+    }
+
+    #[cfg(not(unix))]
+    {
+        std::fs::write(path, content)?;
+        Ok(())
+    }
+}
+
 /// 配置管理器
 pub struct Config {
     pub config: Mutex<AppConfig>,
@@ -120,8 +175,10 @@ impl Config {
     pub fn init(app: &AppHandle) -> Result<Self> {
         let config_dir = app.path().app_config_dir()?;
         std::fs::create_dir_all(&config_dir)?;
+        harden_config_dir(&config_dir)?;
 
         let config_path = config_dir.join("config.json");
+        harden_config_file(&config_path)?;
 
         let config = if config_path.exists() {
             let content = std::fs::read_to_string(&config_path)?;
@@ -129,7 +186,7 @@ impl Config {
         } else {
             let config = AppConfig::default();
             let content = serde_json::to_string_pretty(&config)?;
-            std::fs::write(&config_path, content)?;
+            write_private_config(&config_path, &content)?;
             config
         };
 
@@ -152,7 +209,7 @@ impl Config {
     /// 保存后端完整配置。
     pub fn save(&self, config: AppConfig) -> Result<()> {
         let content = serde_json::to_string_pretty(&config)?;
-        std::fs::write(&self.config_path, content)?;
+        write_private_config(&self.config_path, &content)?;
         *self.config.lock().unwrap() = config;
         Ok(())
     }
@@ -391,6 +448,24 @@ mod tests {
         assert_eq!(saved.mcp_servers["server"].env["TOKEN"], "secret");
 
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_private_config_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let path = temp_config_path("private_permissions");
+        write_private_config(&path, "{}\n").unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+
+        let dir = path.parent().unwrap();
+        harden_config_dir(dir).unwrap();
+        let dir_mode = std::fs::metadata(dir).unwrap().permissions().mode() & 0o777;
+        assert_eq!(dir_mode, 0o700);
+
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     /// 旧版本 config.json 没有 mcpServers 字段，必须能向后兼容解析
