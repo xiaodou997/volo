@@ -137,6 +137,13 @@ fn harden_config_file(_path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// 读取已有配置。
+/// 文件一旦存在，解析失败必须直接报错，不能静默回退默认值，否则后续保存可能覆盖用户凭证。
+fn read_config(path: &Path) -> Result<AppConfig> {
+    let content = std::fs::read_to_string(path)?;
+    Ok(serde_json::from_str(&content)?)
+}
+
 /// 写入包含凭证的配置文件。
 /// Unix/macOS 下强制使用 0600，避免 API key / MCP env 因默认 umask 生成可被其他本机用户读取的文件。
 fn write_private_config(path: &Path, content: &str) -> Result<()> {
@@ -181,8 +188,7 @@ impl Config {
         harden_config_file(&config_path)?;
 
         let config = if config_path.exists() {
-            let content = std::fs::read_to_string(&config_path)?;
-            serde_json::from_str(&content).unwrap_or_default()
+            read_config(&config_path)?
         } else {
             let config = AppConfig::default();
             let content = serde_json::to_string_pretty(&config)?;
@@ -446,6 +452,19 @@ mod tests {
         assert_eq!(saved.llm.api_key, "sk-existing");
         assert_eq!(saved.mcp_servers["server"].args, vec!["new.js"]);
         assert_eq!(saved.mcp_servers["server"].env["TOKEN"], "secret");
+
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn test_invalid_config_is_rejected_without_overwrite() {
+        let path = temp_config_path("invalid_config");
+        let invalid = r#"{"shortcut":"Alt+R","llm":{"apiKey":"sk-must-survive"}"#;
+        write_private_config(&path, invalid).unwrap();
+        let before = std::fs::read_to_string(&path).unwrap();
+
+        assert!(read_config(&path).is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
 
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
