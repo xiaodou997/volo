@@ -5,7 +5,8 @@ use std::path::Path;
 use crate::error::Result;
 use super::engine::Grant;
 
-/// 从 JSON 文件加载授权；文件不存在或损坏时返回空列表
+/// 从 JSON 文件加载授权；文件不存在或损坏时返回空列表。
+/// 旧版记录没有 resource 字段时由 Grant 的 serde default 迁移为 None。
 pub fn load_grants(path: &Path) -> Result<Vec<Grant>> {
     if !path.exists() {
         return Ok(Vec::new());
@@ -48,11 +49,13 @@ mod tests {
             Grant {
                 principal: "plugin-a".to_string(),
                 capability: "clipboard.read".to_string(),
+                resource: None,
                 scope: Scope::Always,
             },
             Grant {
                 principal: "plugin-b".to_string(),
                 capability: "fs.write".to_string(),
+                resource: Some("/tmp/out.txt".to_string()),
                 scope: Scope::Always,
             },
         ];
@@ -62,15 +65,40 @@ mod tests {
         assert_eq!(loaded.len(), 2);
         assert!(loaded.iter().any(|g| g.principal == "plugin-a"
             && g.capability == "clipboard.read"
+            && g.resource.is_none()
             && g.scope == Scope::Always));
         assert!(loaded.iter().any(|g| g.principal == "plugin-b"
             && g.capability == "fs.write"
+            && g.resource.as_deref() == Some("/tmp/out.txt")
             && g.scope == Scope::Always));
 
         // 覆盖写：撤销后只剩一条
         save_grants(&path, &grants[..1]).unwrap();
         let loaded = load_grants(&path).unwrap();
         assert_eq!(loaded.len(), 1);
+
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn test_load_legacy_grant_without_resource() {
+        let path = temp_path("legacy");
+        std::fs::write(
+            &path,
+            r#"[
+              {
+                "principal": "plugin-a",
+                "capability": "fs.read",
+                "scope": "always"
+              }
+            ]"#,
+        )
+        .unwrap();
+
+        let loaded = load_grants(&path).unwrap();
+        assert_eq!(loaded.len(), 1);
+        assert!(loaded[0].resource.is_none());
+        assert_eq!(loaded[0].scope, Scope::Always);
 
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
