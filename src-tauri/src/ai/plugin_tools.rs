@@ -25,7 +25,7 @@ use crate::plugin::manager::PluginState;
 
 use super::agent::ToolExecutor;
 use super::mcp::{McpRegistry, MCP_NAME_PREFIX};
-use super::tools::{ToolRegistry, ToolSpec};
+use super::tools::{ToolRegistry, ToolSpec, AGENT_PRINCIPAL};
 
 /// 前端执行插件工具的超时时间
 pub const PLUGIN_TOOL_TIMEOUT: Duration = Duration::from_secs(30);
@@ -210,6 +210,12 @@ impl ToolExecutor for AgentToolExecutor<'_> {
     ) -> Pin<Box<dyn Future<Output = Result<Value>> + Send + 'a>> {
         Box::pin(async move {
             if name.starts_with(MCP_NAME_PREFIX) {
+                // MCP 也必须经过统一权限管道。把具体工具名编码进 capability scope，
+                // 这样 Session/Always 授权只覆盖当前 MCP tool，而不是一次放行所有 MCP。
+                let capability = format!("mcp.call:{}", name);
+                self.engine
+                    .enforce(self.app, AGENT_PRINCIPAL, &capability, Some(name))
+                    .await?;
                 return self.mcp.call(name, args).await;
             }
             match parse_llm_name(name) {
