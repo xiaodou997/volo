@@ -6,6 +6,9 @@ on:
       - main
       - 'fix/**'
       - 'feat/**'
+      - 'chore/**'
+      - 'refactor/**'
+      - 'test/**'
   pull_request:
 
 permissions:
