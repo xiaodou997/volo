@@ -46,6 +46,9 @@ jobs:
       - name: Frontend typecheck and build
         run: pnpm build
 
+      - name: Frontend security tests
+        run: pnpm test:frontend
+
       - name: Rust format check
         continue-on-error: true
         working-directory: src-tauri
