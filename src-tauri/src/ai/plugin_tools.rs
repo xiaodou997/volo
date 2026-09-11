@@ -3,9 +3,11 @@
 //! emit `plugin-tool-call` 事件 → 前端沙箱执行插件 JS → `plugin_tool_result` 命令回传 →
 //! oneshot 唤醒等待中的工具调用。模式与 PermissionEngine 的审批往返一致。
 //!
-//! 命名空间约定：LLM 工具名 `mcp__` 前缀保留给 MCP server（见 ai::mcp），
-//! 插件 id `mcp` 是保留前缀（会与 MCP 命名空间冲突），加载时只打 warn 日志不阻断
-//! （见 plugin::manager::scan_plugins）。
+//! 命名空间约定：
+//! - 内置工具保持自身名字；
+//! - MCP 工具使用 `mcp__...`；
+//! - 插件工具统一使用 `plugin__...`，并带原始 plugin/tool id 的稳定哈希。
+//! 这样插件不会再与 MCP / builtin 命名空间冲突，sanitize 后相同的 id 也不会互相覆盖。
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -25,13 +27,18 @@ use crate::plugin::manager::PluginState;
 
 use super::agent::ToolExecutor;
 use super::mcp::{McpRegistry, MCP_NAME_PREFIX};
-use super::tools::{ToolRegistry, ToolSpec};
+use super::tools::{ToolRegistry, ToolSpec, AGENT_PRINCIPAL};
 
 /// 前端执行插件工具的超时时间
 pub const PLUGIN_TOOL_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// LLM 工具名分隔符：{sanitized_plugin_id}__{sanitized_tool_id}
-const NAME_SEPARATOR: &str = "__";
+/// 插件工具独立 LLM 命名空间。
+pub const PLUGIN_NAME_PREFIX: &str = "plugin__";
+
+// OpenAI function/tool name 通常限制在 64 字符内。固定布局：
+// plugin__(8) + plugin(14) + __(2) + tool(22) + __(2) + hash(16) = 64。
+const PLUGIN_SEGMENT_MAX: usize = 14;
+const TOOL_SEGMENT_MAX: usize = 22;
 
 /// `plugin-tool-call` 事件 payload（camelCase）
 #[derive(Debug, Clone, Serialize)]
@@ -127,25 +134,41 @@ pub fn sanitize(s: &str) -> String {
         .collect()
 }
 
-/// 插件工具的 LLM 侧命名空间名：{sanitized_plugin_id}__{sanitized_tool_id}
-pub fn to_llm_name(plugin_id: &str, tool_id: &str) -> String {
-    format!(
-        "{}{}{}",
-        sanitize(plugin_id),
-        NAME_SEPARATOR,
-        sanitize(tool_id)
-    )
+fn truncate_segment(value: &str, max: usize) -> String {
+    sanitize(value).chars().take(max).collect()
 }
 
-/// 反解 LLM 工具名；不含 `__` 分隔符返回 None（即非插件工具）。
-///
-/// 清洗后的 plugin_id 可能含单下划线，分隔符取第一个 `__`
-pub fn parse_llm_name(name: &str) -> Option<(String, String)> {
-    let (plugin_id, tool_id) = name.split_once(NAME_SEPARATOR)?;
-    if plugin_id.is_empty() || tool_id.is_empty() {
-        return None;
+/// FNV-1a 64-bit：不依赖随机 seed，保证同一 plugin/tool id 在各平台生成一致名字。
+fn stable_tool_hash(plugin_id: &str, tool_id: &str) -> u64 {
+    const OFFSET: u64 = 0xcbf29ce484222325;
+    const PRIME: u64 = 0x100000001b3;
+
+    let mut hash = OFFSET;
+    for byte in plugin_id
+        .as_bytes()
+        .iter()
+        .copied()
+        .chain(std::iter::once(0))
+        .chain(tool_id.as_bytes().iter().copied())
+    {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(PRIME);
     }
-    Some((plugin_id.to_string(), tool_id.to_string()))
+    hash
+}
+
+/// 插件工具的 LLM 侧名字：
+/// `plugin__{short_plugin}__{short_tool}__{stable_hash}`。
+///
+/// 可读片段用于调试，最终 hash 使用原始 id，负责消除 sanitize / 截断碰撞。
+pub fn to_llm_name(plugin_id: &str, tool_id: &str) -> String {
+    format!(
+        "{}{}__{}__{:016x}",
+        PLUGIN_NAME_PREFIX,
+        truncate_segment(plugin_id, PLUGIN_SEGMENT_MAX),
+        truncate_segment(tool_id, TOOL_SEGMENT_MAX),
+        stable_tool_hash(plugin_id, tool_id)
+    )
 }
 
 /// 聚合所有插件 contributes.tools 的 LLM 规格：
@@ -172,19 +195,17 @@ pub fn collect_specs(plugins: &PluginState) -> Vec<ToolSpec> {
     specs
 }
 
-/// 按清洗后的 LLM 名找回 manifest 里的原始 plugin_id / tool_id
-fn lookup_tool(
-    plugins: &PluginState,
-    sanitized_plugin_id: &str,
-    sanitized_tool_id: &str,
-) -> Option<(String, String)> {
+/// 用完整 LLM 名反查 manifest 里的原始 plugin_id / tool_id。
+/// 不再依赖 sanitize 后的 id 反解，因此 sanitize 碰撞不会导致“命中第一个插件”。
+fn lookup_tool(plugins: &PluginState, llm_name: &str) -> Option<(String, String)> {
+    if !llm_name.starts_with(PLUGIN_NAME_PREFIX) {
+        return None;
+    }
+
     let plugins = plugins.plugins.lock().ok()?;
     for plugin in plugins.values() {
-        if sanitize(&plugin.id) != sanitized_plugin_id {
-            continue;
-        }
         for tool in &plugin.contributes.tools {
-            if sanitize(&tool.id) == sanitized_tool_id {
+            if to_llm_name(&plugin.id, &tool.id) == llm_name {
                 return Some((plugin.id.clone(), tool.id.clone()));
             }
         }
@@ -193,7 +214,7 @@ fn lookup_tool(
 }
 
 /// 聚合执行器，dispatch 顺序：
-/// `mcp__` 前缀 → MCP server；含 `__` → 插件工具桥；其余 → 内置 ToolRegistry
+/// `mcp__` → MCP；`plugin__` → 插件工具桥；其余 → 内置 ToolRegistry。
 pub struct AgentToolExecutor<'a> {
     pub app: &'a AppHandle,
     pub engine: &'a PermissionEngine,
@@ -210,32 +231,31 @@ impl ToolExecutor for AgentToolExecutor<'_> {
     ) -> Pin<Box<dyn Future<Output = Result<Value>> + Send + 'a>> {
         Box::pin(async move {
             if name.starts_with(MCP_NAME_PREFIX) {
+                // MCP 也必须经过统一权限管道。把具体工具名编码进 capability，
+                // 这样 Session/Always 授权只覆盖当前 MCP tool，而不是一次放行所有 MCP。
+                let capability = format!("mcp.call:{}", name);
+                self.engine
+                    .enforce(self.app, AGENT_PRINCIPAL, &capability, Some(name))
+                    .await?;
                 return self.mcp.call(name, args).await;
             }
-            match parse_llm_name(name) {
-                Some((plugin_id, tool_id)) => {
-                    self.execute_plugin_tool(&plugin_id, &tool_id, args).await
-                }
-                None => ToolRegistry::execute(self.app, self.engine, name, &args).await,
+
+            if name.starts_with(PLUGIN_NAME_PREFIX) {
+                return self.execute_plugin_tool(name, args).await;
             }
+
+            ToolRegistry::execute(self.app, self.engine, name, &args).await
         })
     }
 }
 
 impl AgentToolExecutor<'_> {
-    /// 插件工具路径：查 manifest 确认工具存在 → 挂 oneshot → emit 事件 → 超时等待
+    /// 插件工具路径：按完整 namespace 名确认工具存在 → 挂 oneshot → emit 事件 → 超时等待
     ///
     /// 出错/超时统一返回 Err，agent 循环会把错误文本作为 tool 结果回喂 LLM
-    async fn execute_plugin_tool(
-        &self,
-        plugin_id: &str,
-        tool_id: &str,
-        args: Value,
-    ) -> Result<Value> {
-        let (orig_plugin_id, orig_tool_id) = lookup_tool(self.plugins, plugin_id, tool_id)
-            .ok_or_else(|| {
-                VoloError::NotFound(format!("plugin tool: {}{}{}", plugin_id, NAME_SEPARATOR, tool_id))
-            })?;
+    async fn execute_plugin_tool(&self, llm_name: &str, args: Value) -> Result<Value> {
+        let (orig_plugin_id, orig_tool_id) = lookup_tool(self.plugins, llm_name)
+            .ok_or_else(|| VoloError::NotFound(format!("plugin tool: {}", llm_name)))?;
 
         let (request_id, rx) = self.tool_state.begin_call();
         let payload = PluginToolCall {
@@ -331,7 +351,7 @@ mod tests {
         PluginState::for_test(plugins)
     }
 
-    // ---- 命名空间清洗 / 反解 ----
+    // ---- 命名空间 / 清洗 / 碰撞 ----
 
     #[test]
     fn test_sanitize() {
@@ -343,36 +363,35 @@ mod tests {
     }
 
     #[test]
-    fn test_llm_name_roundtrip() {
+    fn test_llm_name_has_isolated_namespace_and_length_limit() {
         let name = to_llm_name("uuid-gen", "gen_uuid");
-        assert_eq!(name, "uuid-gen__gen_uuid");
-        assert_eq!(
-            parse_llm_name(&name),
-            Some(("uuid-gen".to_string(), "gen_uuid".to_string()))
+        assert!(name.starts_with(PLUGIN_NAME_PREFIX));
+        assert!(name.len() <= 64);
+        assert_eq!(name, to_llm_name("uuid-gen", "gen_uuid"));
+    }
+
+    #[test]
+    fn test_sanitize_collisions_are_disambiguated_by_hash() {
+        // 可读段相同，但原始 id 不同，最终 hash 必须不同。
+        assert_eq!(sanitize("a.b"), sanitize("a_b"));
+        assert_ne!(
+            to_llm_name("a.b", "tool"),
+            to_llm_name("a_b", "tool")
+        );
+
+        assert_eq!(sanitize("a.b"), sanitize("a b"));
+        assert_ne!(
+            to_llm_name("plugin", "a.b"),
+            to_llm_name("plugin", "a b")
         );
     }
 
     #[test]
-    fn test_parse_llm_name_with_single_underscores() {
-        // 清洗后的 plugin_id 可能含单下划线，分隔符必须是第一个双下划线
-        let name = to_llm_name("my.plugin", "gen_uuid");
-        assert_eq!(name, "my_plugin__gen_uuid");
-        assert_eq!(
-            parse_llm_name(&name),
-            Some(("my_plugin".to_string(), "gen_uuid".to_string()))
-        );
-
-        // tool_id 含双下划线时归 tool_id 一侧
-        let name = to_llm_name("p", "a__b");
-        assert_eq!(parse_llm_name(&name), Some(("p".to_string(), "a__b".to_string())));
-    }
-
-    #[test]
-    fn test_parse_llm_name_rejects_builtin_and_empty() {
-        assert!(parse_llm_name("clipboard_read").is_none());
-        assert!(parse_llm_name("__tool").is_none());
-        assert!(parse_llm_name("plugin__").is_none());
-        assert!(parse_llm_name("").is_none());
+    fn test_plugin_mcp_id_cannot_collide_with_mcp_namespace() {
+        let plugin_name = to_llm_name("mcp", "server__tool");
+        assert!(plugin_name.starts_with("plugin__"));
+        assert!(!plugin_name.starts_with(MCP_NAME_PREFIX));
+        assert_ne!(plugin_name, "mcp__server__tool");
     }
 
     // ---- 规格聚合 ----
@@ -390,32 +409,49 @@ mod tests {
             make_plugin("empty-plugin", vec![]),
         ]);
 
-        let mut specs = collect_specs(&state);
-        specs.sort_by(|a, b| a.name.cmp(&b.name));
+        let specs = collect_specs(&state);
         assert_eq!(specs.len(), 2);
 
-        assert_eq!(specs[0].name, "uuid-gen__gen_uuid");
-        assert_eq!(specs[0].description, "生成指定数量的 UUID v4");
-        assert_eq!(specs[0].parameters["type"], "object");
+        let gen = specs
+            .iter()
+            .find(|spec| spec.name == to_llm_name("uuid-gen", "gen_uuid"))
+            .unwrap();
+        assert_eq!(gen.description, "生成指定数量的 UUID v4");
+        assert_eq!(gen.parameters["type"], "object");
 
-        // description 缺省回退工具 name
-        assert_eq!(specs[1].name, "uuid-gen__no_desc");
-        assert_eq!(specs[1].description, "无描述工具");
+        let no_desc = specs
+            .iter()
+            .find(|spec| spec.name == to_llm_name("uuid-gen", "no_desc"))
+            .unwrap();
+        assert_eq!(no_desc.description, "无描述工具");
     }
 
     #[test]
-    fn test_lookup_tool_matches_sanitized_ids() {
-        let state = make_plugin_state(vec![make_plugin(
-            "my.plugin",
-            vec![make_tool("gen-uuid", "生成 UUID", None)],
-        )]);
+    fn test_lookup_tool_uses_full_hashed_name() {
+        let state = make_plugin_state(vec![
+            make_plugin(
+                "my.plugin",
+                vec![make_tool("gen-uuid", "生成 UUID", None)],
+            ),
+            make_plugin(
+                "my_plugin",
+                vec![make_tool("gen-uuid", "另一工具", None)],
+            ),
+        ]);
 
+        let dotted = to_llm_name("my.plugin", "gen-uuid");
+        let underscored = to_llm_name("my_plugin", "gen-uuid");
+        assert_ne!(dotted, underscored);
         assert_eq!(
-            lookup_tool(&state, "my_plugin", "gen-uuid"),
+            lookup_tool(&state, &dotted),
             Some(("my.plugin".to_string(), "gen-uuid".to_string()))
         );
-        assert!(lookup_tool(&state, "my_plugin", "nope").is_none());
-        assert!(lookup_tool(&state, "other", "gen-uuid").is_none());
+        assert_eq!(
+            lookup_tool(&state, &underscored),
+            Some(("my_plugin".to_string(), "gen-uuid".to_string()))
+        );
+        assert!(lookup_tool(&state, "plugin__nope").is_none());
+        assert!(lookup_tool(&state, "mcp__server__tool").is_none());
     }
 
     // ---- pending 唤醒 ----

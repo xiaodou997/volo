@@ -12,6 +12,8 @@ use tracing::{info, warn};
 use crate::error::{Result, VoloError};
 use crate::search::FeatureInfo;
 
+const DISABLED_MARKER: &str = ".disabled";
+
 /// 插件定义
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Plugin {
@@ -32,6 +34,15 @@ pub struct Plugin {
     pub icon: Option<String>,
     #[serde(default)]
     pub contributes: Contributes,
+}
+
+/// 管理页使用的已安装插件视图。
+/// enabled 属于用户运行状态，不写回 plugin.json。
+#[derive(Debug, Clone, Serialize)]
+pub struct InstalledPlugin {
+    #[serde(flatten)]
+    pub plugin: Plugin,
+    pub enabled: bool,
 }
 
 /// 插件贡献点（Manifest v2）
@@ -112,6 +123,8 @@ impl From<Feature> for FeatureInfo {
 
 /// 插件状态
 pub struct PluginState {
+    /// 仅包含“当前启用”的插件。搜索、Command、Agent Tool 和 runner 都从这里取插件，
+    /// 因而禁用后会统一从运行时消失。
     pub plugins: Mutex<HashMap<String, Plugin>>,
     pub plugins_dir: PathBuf,
     /// 热重载 watcher（仅保活，drop 即停止监听；事件经 start_hot_reload 的防抖线程处理）
@@ -133,7 +146,7 @@ impl PluginState {
         // 播种内置插件（已安装且版本一致的跳过，版本变化时覆盖更新）
         state.seed_builtin_plugins(app);
 
-        // 扫描已安装的插件
+        // 扫描已安装且启用的插件
         if let Err(e) = state.scan_plugins() {
             warn!("Failed to scan plugins: {}", e);
         }
@@ -141,7 +154,8 @@ impl PluginState {
         Ok(state)
     }
 
-    /// 把内置插件复制到插件目录（版本变化或已安装副本损坏时覆盖更新）
+    /// 把内置插件复制到插件目录（版本变化或已安装副本损坏时覆盖更新）。
+    /// 内置插件升级时保留用户的禁用状态。
     fn seed_builtin_plugins(&self, app: &AppHandle) {
         let Some(source) = builtin_plugins_dir(app) else {
             return;
@@ -167,6 +181,8 @@ impl PluginState {
             if !should_reseed(&target, &plugin.version) {
                 continue;
             }
+
+            let was_disabled = is_plugin_disabled(&target);
             if target.exists() {
                 if let Err(e) = std::fs::remove_dir_all(&target) {
                     warn!("Failed to remove outdated builtin plugin {}: {}", plugin.id, e);
@@ -174,13 +190,20 @@ impl PluginState {
                 }
             }
             match copy_dir_all(&path, &target) {
-                Ok(()) => info!("Seeded builtin plugin: {} ({})", plugin.name, plugin.id),
+                Ok(()) => {
+                    if was_disabled {
+                        if let Err(e) = write_disabled_marker(&target) {
+                            warn!("Failed to restore disabled state for {}: {}", plugin.id, e);
+                        }
+                    }
+                    info!("Seeded builtin plugin: {} ({})", plugin.name, plugin.id);
+                }
                 Err(e) => warn!("Failed to seed builtin plugin {}: {}", plugin.id, e),
             }
         }
     }
 
-    /// 扫描插件目录
+    /// 扫描插件目录，只把启用插件注册进运行时。
     pub fn scan_plugins(&self) -> Result<()> {
         let mut plugins = self.plugins.lock()
             .map_err(|_| VoloError::Other("Lock error".to_string()))?;
@@ -194,22 +217,79 @@ impl PluginState {
         let entries = std::fs::read_dir(&self.plugins_dir)?;
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.is_dir() {
-                if let Ok(plugin) = load_plugin_from_dir(&path) {
-                    // `mcp` 是 MCP 工具命名空间（mcp__ 前缀）的保留 id，冲突时只告警不阻断
-                    if plugin.id == "mcp" {
-                        warn!(
-                            "Plugin id \"mcp\" is reserved for the MCP tool namespace; \
-                             its tools may shadow or be shadowed by MCP tools"
-                        );
-                    }
-                    info!("Loaded plugin: {} ({})", plugin.name, plugin.id);
-                    plugins.insert(plugin.id.clone(), plugin);
+            if !path.is_dir() || is_plugin_disabled(&path) {
+                continue;
+            }
+
+            if let Ok(plugin) = load_plugin_from_dir(&path) {
+                // `mcp` 是 MCP 工具命名空间（mcp__ 前缀）的保留 id，冲突时只告警不阻断
+                if plugin.id == "mcp" {
+                    warn!(
+                        "Plugin id \"mcp\" is reserved for the MCP tool namespace; \
+                         its tools may shadow or be shadowed by MCP tools"
+                    );
                 }
+                info!("Loaded plugin: {} ({})", plugin.name, plugin.id);
+                plugins.insert(plugin.id.clone(), plugin);
             }
         }
 
-        info!("Loaded {} plugins", plugins.len());
+        info!("Loaded {} enabled plugins", plugins.len());
+        Ok(())
+    }
+
+    /// 返回所有已安装插件（包含禁用插件），供管理页展示。
+    pub fn list_installed_plugins(&self) -> Result<Vec<InstalledPlugin>> {
+        let mut installed = Vec::new();
+        if !self.plugins_dir.exists() {
+            return Ok(installed);
+        }
+
+        for entry in std::fs::read_dir(&self.plugins_dir)?.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            let Ok(plugin) = load_plugin_from_dir(&path) else {
+                continue;
+            };
+            installed.push(InstalledPlugin {
+                enabled: !is_plugin_disabled(&path),
+                plugin,
+            });
+        }
+
+        installed.sort_by(|a, b| a.plugin.name.cmp(&b.plugin.name));
+        Ok(installed)
+    }
+
+    fn find_installed_plugin(&self, id: &str) -> Result<Plugin> {
+        self.list_installed_plugins()?
+            .into_iter()
+            .find(|item| item.plugin.id == id)
+            .map(|item| item.plugin)
+            .ok_or_else(|| VoloError::NotFound(id.to_string()))
+    }
+
+    /// 持久化插件启停状态并立即刷新运行时注册表。
+    pub fn set_enabled(&self, id: &str, enabled: bool) -> Result<()> {
+        let plugin = self.find_installed_plugin(id)?;
+        let marker = plugin.path.join(DISABLED_MARKER);
+
+        if enabled {
+            if marker.exists() {
+                fs::remove_file(&marker)?;
+            }
+        } else if !marker.exists() {
+            write_disabled_marker(&plugin.path)?;
+        }
+
+        self.scan_plugins()?;
+        info!(
+            "Plugin {} {}",
+            id,
+            if enabled { "enabled" } else { "disabled" }
+        );
         Ok(())
     }
 
@@ -266,13 +346,13 @@ impl PluginState {
         }
     }
 
-    /// 获取插件
+    /// 获取启用中的插件
     pub fn get_plugin(&self, id: &str) -> Option<Plugin> {
         let plugins = self.plugins.lock().ok()?;
         plugins.get(id).cloned()
     }
 
-    /// 获取所有插件
+    /// 获取所有启用中的插件
     pub fn get_all_plugins(&self) -> Vec<Plugin> {
         let plugins = self.plugins.lock().ok();
         match plugins {
@@ -281,7 +361,7 @@ impl PluginState {
         }
     }
 
-    /// 安装插件（从本地目录）
+    /// 安装插件（从本地目录）。覆盖安装时保留原有启停状态。
     pub fn install_from_dir(&self, source_dir: &PathBuf) -> Result<Plugin> {
         // 验证源目录
         if !source_dir.exists() {
@@ -293,6 +373,7 @@ impl PluginState {
 
         // 检查是否已安装
         let target_dir = self.plugins_dir.join(&plugin.id);
+        let was_disabled = is_plugin_disabled(&target_dir);
         if target_dir.exists() {
             // 删除旧版本
             fs::remove_dir_all(&target_dir)?;
@@ -303,26 +384,31 @@ impl PluginState {
 
         // 复制所有文件
         copy_dir_all(source_dir, &target_dir)?;
-
-        // 更新内存缓存
-        let mut plugins = self.plugins.lock()
-            .map_err(|_| VoloError::Other("Lock error".to_string()))?;
+        if was_disabled {
+            write_disabled_marker(&target_dir)?;
+        }
 
         let installed_plugin = Plugin {
             path: target_dir.clone(),
             ..plugin
         };
 
-        plugins.insert(installed_plugin.id.clone(), installed_plugin.clone());
+        // 更新内存缓存：禁用插件不注册进运行时
+        let mut plugins = self.plugins.lock()
+            .map_err(|_| VoloError::Other("Lock error".to_string()))?;
+        if was_disabled {
+            plugins.remove(&installed_plugin.id);
+        } else {
+            plugins.insert(installed_plugin.id.clone(), installed_plugin.clone());
+        }
 
         info!("Installed plugin: {} ({})", installed_plugin.name, installed_plugin.id);
         Ok(installed_plugin)
     }
 
-    /// 卸载插件
+    /// 卸载插件（启用或禁用状态都可卸载）
     pub fn uninstall(&self, id: &str) -> Result<()> {
-        let plugin = self.get_plugin(id)
-            .ok_or_else(|| VoloError::NotFound(id.to_string()))?;
+        let plugin = self.find_installed_plugin(id)?;
 
         // 删除插件目录
         if plugin.path.exists() {
@@ -337,6 +423,15 @@ impl PluginState {
         info!("Uninstalled plugin: {}", id);
         Ok(())
     }
+}
+
+fn is_plugin_disabled(dir: &Path) -> bool {
+    dir.join(DISABLED_MARKER).is_file()
+}
+
+fn write_disabled_marker(dir: &Path) -> Result<()> {
+    fs::write(dir.join(DISABLED_MARKER), b"disabled\n")?;
+    Ok(())
 }
 
 /// 内置插件源目录：生产包读资源目录，开发模式读仓库内 plugins/
@@ -452,9 +547,8 @@ pub(crate) fn copy_dir_all(src: &PathBuf, dst: &PathBuf) -> Result<()> {
 }
 
 #[tauri::command]
-pub fn list_plugins(state: tauri::State<'_, PluginState>) -> Vec<Plugin> {
-    let plugins = state.plugins.lock().unwrap();
-    plugins.values().cloned().collect()
+pub fn list_plugins(state: tauri::State<'_, PluginState>) -> Result<Vec<InstalledPlugin>> {
+    state.list_installed_plugins()
 }
 
 #[tauri::command]
@@ -466,6 +560,18 @@ pub fn get_plugin(id: String, state: tauri::State<'_, PluginState>) -> Result<Pl
 #[tauri::command]
 pub fn scan_plugins(state: tauri::State<'_, PluginState>) -> Result<()> {
     state.scan_plugins()
+}
+
+#[tauri::command]
+pub fn set_plugin_enabled(
+    app: AppHandle,
+    id: String,
+    enabled: bool,
+    state: tauri::State<'_, PluginState>,
+) -> Result<()> {
+    state.set_enabled(&id, enabled)?;
+    let _ = app.emit("plugins-changed", ());
+    Ok(())
 }
 
 #[tauri::command]
@@ -493,6 +599,7 @@ pub async fn install_plugin(
 ) -> Result<Plugin> {
     Err(VoloError::Plugin("Use install_plugin_from_dir instead".to_string()))
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -500,6 +607,28 @@ mod tests {
     fn temp_plugin_dir(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("volo_plugin_test_{}_{}", name, uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn state_for_dir(dir: PathBuf) -> PluginState {
+        PluginState {
+            plugins: Mutex::new(HashMap::new()),
+            plugins_dir: dir,
+            _watcher: Mutex::new(None),
+        }
+    }
+
+    fn write_simple_plugin(root: &Path, id: &str) -> PathBuf {
+        let dir = root.join(id);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("plugin.json"),
+            format!(
+                r#"{{ "id": "{}", "name": "{}", "version": "1.0.0" }}"#,
+                id, id
+            ),
+        )
+        .unwrap();
         dir
     }
 
@@ -826,5 +955,32 @@ mod tests {
         assert!(matches!(result, Err(VoloError::Json(_))));
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_disable_removes_plugin_from_runtime_and_persists() {
+        let root = temp_plugin_dir("disable_runtime");
+        let plugin_dir = write_simple_plugin(&root, "demo");
+        let state = state_for_dir(root.clone());
+
+        state.scan_plugins().unwrap();
+        assert!(state.get_plugin("demo").is_some());
+
+        state.set_enabled("demo", false).unwrap();
+        assert!(plugin_dir.join(DISABLED_MARKER).is_file());
+        assert!(state.get_plugin("demo").is_none());
+        let installed = state.list_installed_plugins().unwrap();
+        assert_eq!(installed.len(), 1);
+        assert!(!installed[0].enabled);
+
+        // 再次扫描（模拟热重载/重启后的扫描）也不能把禁用插件重新注册。
+        state.scan_plugins().unwrap();
+        assert!(state.get_plugin("demo").is_none());
+
+        state.set_enabled("demo", true).unwrap();
+        assert!(!plugin_dir.join(DISABLED_MARKER).exists());
+        assert!(state.get_plugin("demo").is_some());
+
+        std::fs::remove_dir_all(&root).ok();
     }
 }

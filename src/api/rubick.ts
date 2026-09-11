@@ -210,6 +210,7 @@ export interface PermissionRequest {
 export interface PermissionGrant {
   pluginId: string;
   capability: string;
+  resource?: string;
   scope: PermissionScope;
   risk: RiskLevel;
   description: string;

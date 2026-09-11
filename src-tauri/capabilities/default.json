@@ -1,17 +1,11 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capability for the main window",
+  "description": "Least-privilege capability for the trusted main window. Filesystem, shell, clipboard, notification and dialog access go through Volo's Rust commands and PermissionEngine instead of direct Tauri plugin IPC.",
   "windows": ["main"],
   "permissions": [
     "core:default",
-    "opener:default",
-    "notification:default",
-    "clipboard-manager:default",
-    "dialog:default",
-    "fs:default",
-    "global-shortcut:default",
-    "positioner:default",
-    "shell:default"
+    "updater:default",
+    "process:allow-restart"
   ]
 }

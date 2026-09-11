@@ -310,13 +310,18 @@
           暂无已授权的插件权限
         </div>
 
-        <div v-for="grant in grants" :key="grant.pluginId + ':' + grant.capability" class="setting-item">
+        <div
+          v-for="grant in grants"
+          :key="grant.pluginId + ':' + grant.capability + ':' + (grant.resource ?? '')"
+          class="setting-item"
+        >
           <div class="setting-label">
             <span class="label-text">
               {{ grant.pluginId }}
               <span class="grant-risk" :class="'grant-risk-' + grant.risk.toLowerCase()">{{ riskLabel(grant.risk) }}</span>
             </span>
             <span class="label-desc">{{ grant.description }} · {{ scopeLabel(grant.scope) }}</span>
+            <span v-if="grant.resource" class="label-desc grant-resource">{{ grant.resource }}</span>
           </div>
           <div class="setting-control">
             <button class="danger-btn" @click="revokeGrant(grant)">撤销</button>
@@ -766,12 +771,13 @@ async function loadGrants() {
   }
 }
 
-// 撤销授权
+// 精确撤销一条授权；resource 为空时仍兼容旧版无资源授权。
 async function revokeGrant(grant: PermissionGrant) {
   try {
     await invoke('permission_revoke', {
       pluginId: grant.pluginId,
       capability: grant.capability,
+      resource: grant.resource ?? null,
     });
     await loadGrants();
   } catch (e) {
@@ -1185,6 +1191,11 @@ input[type="range"]::-webkit-slider-thumb {
   padding: 12px 0;
   font-size: 13px;
   color: var(--text-tertiary);
+}
+
+.grant-resource {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  word-break: break-all;
 }
 
 .grant-risk {

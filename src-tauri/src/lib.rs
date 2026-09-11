@@ -31,13 +31,15 @@ pub fn run() {
                 .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
                 .init();
 
-            // 使用优化的启动流程
+            // 关键启动流程必须完整成功。任何错误都直接终止 Tauri setup，
+            // 避免 Config/Database/PermissionEngine 等 managed state 缺失后仍进入半初始化 UI。
             let app_handle = app.handle().clone();
-            tauri::async_runtime::block_on(async move {
-                if let Err(e) = StartupManager::optimized_startup(&app_handle).await {
-                    tracing::error!("Startup failed: {}", e);
-                }
-            });
+            if let Err(e) = tauri::async_runtime::block_on(async move {
+                StartupManager::optimized_startup(&app_handle).await
+            }) {
+                tracing::error!("Startup failed: {}", e);
+                return Err(Box::<dyn std::error::Error>::from(e));
+            }
 
             Ok(())
         })
@@ -131,6 +133,7 @@ pub fn run() {
             plugin::manager::list_plugins,
             plugin::manager::get_plugin,
             plugin::manager::scan_plugins,
+            plugin::manager::set_plugin_enabled,
             plugin::manager::install_plugin,
             plugin::manager::install_plugin_from_dir,
             plugin::manager::uninstall_plugin,
@@ -145,7 +148,8 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app_handle, event| {
-            // 退出时终止所有 MCP 子进程
+            // 退出时终止所有 MCP 子进程。若 setup 在 managed state 注册前失败，
+            // 应用不会进入 run 阶段，因此这里仍可安全读取 McpRegistry。
             if let tauri::RunEvent::Exit = event {
                 use tauri::Manager;
                 app_handle.state::<crate::ai::mcp::McpRegistry>().shutdown();
