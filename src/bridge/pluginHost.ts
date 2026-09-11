@@ -29,6 +29,15 @@ export interface PluginHost {
   dispose: () => void;
 }
 
+/**
+ * Tauri invoke 的最小可替换边界。
+ * 生产环境使用真实 invoke；测试可注入 fake，避免依赖 WebView/Tauri runtime。
+ */
+export type PluginHostInvoke = (
+  command: string,
+  args?: Record<string, unknown>,
+) => Promise<unknown>;
+
 interface MethodEntry {
   command: string;
   /** 是否需要自动附加 pluginId（插件面命令） */
@@ -84,6 +93,7 @@ export function createPluginHost(
   iframe: HTMLIFrameElement,
   pluginId: string,
   handlers: PluginHostHandlers,
+  invokeFn: PluginHostInvoke = invoke,
 ): PluginHost {
   let disposed = false;
 
@@ -104,7 +114,7 @@ export function createPluginHost(
       const args = entry.attachPluginId
         ? { ...(msg.args || {}), pluginId }
         : msg.args || {};
-      const data = await invoke(entry.command, args);
+      const data = await invokeFn(entry.command, args);
       post({ ...base, ok: true, data });
     } catch (e) {
       post({ ...base, ok: false, error: String(e) });
