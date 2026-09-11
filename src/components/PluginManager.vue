@@ -68,7 +68,7 @@
               />
               <span class="toggle-slider"></span>
             </label>
-            <button class="action-btn" @click="openPlugin(plugin)">打开</button>
+            <button class="action-btn" :disabled="!plugin.enabled" @click="openPlugin(plugin)">打开</button>
             <button class="action-btn danger" @click="uninstallPlugin(plugin)">卸载</button>
           </div>
         </div>
@@ -125,13 +125,11 @@ const plugins = ref<Plugin[]>([]);
 const loading = ref(true);
 const showInstallDialog = ref(false);
 
-// 加载插件列表
+// 加载插件列表（后端同时返回真实启停状态）
 async function loadPlugins() {
   loading.value = true;
   try {
-    const list = await invoke<Plugin[]>('list_plugins');
-    // 添加 enabled 字段（默认启用）
-    plugins.value = list.map(p => ({ ...p, enabled: true }));
+    plugins.value = await invoke<Plugin[]>('list_plugins');
   } catch (e) {
     console.error('Failed to load plugins:', e);
   } finally {
@@ -139,14 +137,29 @@ async function loadPlugins() {
   }
 }
 
-// 切换插件启用状态
+// 切换插件启用状态：后端持久化并同步刷新 Runtime。
 async function togglePlugin(plugin: Plugin) {
-  plugin.enabled = !plugin.enabled;
-  // TODO: 调用后端 API 保存启用状态
+  const previous = plugin.enabled;
+  const next = !previous;
+  plugin.enabled = next;
+
+  try {
+    await invoke('set_plugin_enabled', {
+      id: plugin.id,
+      enabled: next,
+    });
+  } catch (e) {
+    plugin.enabled = previous;
+    console.error('Failed to toggle plugin:', e);
+    alert(`切换插件状态失败：${e}`);
+  }
 }
 
 // 打开插件
 function openPlugin(plugin: Plugin) {
+  if (!plugin.enabled) {
+    return;
+  }
   if (plugin.features.length > 0) {
     emit('open', plugin.id, plugin.features[0].id);
   }
@@ -187,7 +200,7 @@ let unlistenPluginsChanged: UnlistenFn | null = null;
 
 onMounted(async () => {
   loadPlugins();
-  // 插件热重载：目录变化（含外部编辑插件代码、目录安装）后自动刷新列表
+  // 插件热重载或启停变化后自动刷新列表
   unlistenPluginsChanged = await listen('plugins-changed', () => {
     void loadPlugins();
   });
@@ -455,6 +468,12 @@ onUnmounted(() => {
 
 .action-btn:hover {
   background: var(--hover-bg);
+}
+
+.action-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  background: var(--bg-primary);
 }
 
 .action-btn.danger {
