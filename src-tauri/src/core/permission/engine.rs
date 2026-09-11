@@ -18,6 +18,10 @@ use super::{audit::AuditLog, store};
 /// 默认审批超时时间
 pub const DEFAULT_APPROVAL_TIMEOUT: Duration = Duration::from_secs(60);
 
+/// (principal, capability, resource) -> scope。
+/// resource=None 只覆盖没有资源维度的调用；不会作为任意资源的通配授权。
+type GrantKey = (String, String, Option<String>);
+
 /// 裁决结果
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Decision {
@@ -53,6 +57,10 @@ impl Scope {
 pub struct Grant {
     pub principal: String,
     pub capability: String,
+    /// 授权绑定的具体资源。旧版 permissions.json 没有该字段时按 None 加载，
+    /// 但它不会匹配新的 resource-bearing 调用，因此不会继续形成全局路径授权。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource: Option<String>,
     pub scope: Scope,
 }
 
@@ -74,6 +82,7 @@ pub struct PermissionRequest {
 pub struct GrantInfo {
     pub plugin_id: String,
     pub capability: String,
+    pub resource: Option<String>,
     pub scope: Scope,
     pub risk: RiskLevel,
     pub description: &'static str,
@@ -104,10 +113,76 @@ pub fn decide(declared: bool, risk: RiskLevel, grant: Option<Scope>) -> Decision
     }
 }
 
+/// 资源模式匹配：
+/// - 无 `*` 时精确匹配；
+/// - `*` 匹配单层任意字符（不跨 `/`）；
+/// - `**` 可跨目录匹配；
+/// - Windows 路径分隔符会统一为 `/`。
+fn resource_matches(pattern: &str, resource: &str) -> bool {
+    let pattern = pattern.replace('\\', "/");
+    let resource = resource.replace('\\', "/");
+
+    if !pattern.contains('*') {
+        return pattern == resource;
+    }
+
+    fn matches_from(
+        pattern: &[u8],
+        resource: &[u8],
+        pi: usize,
+        ri: usize,
+        memo: &mut HashMap<(usize, usize), bool>,
+    ) -> bool {
+        if let Some(result) = memo.get(&(pi, ri)) {
+            return *result;
+        }
+
+        let result = if pi == pattern.len() {
+            ri == resource.len()
+        } else if pattern[pi] == b'*' {
+            if pi + 1 < pattern.len() && pattern[pi + 1] == b'*' {
+                // 连续两个星号：跳过 `**`，或消费任意一个字符（包含 `/`）。
+                matches_from(pattern, resource, pi + 2, ri, memo)
+                    || (ri < resource.len()
+                        && matches_from(pattern, resource, pi, ri + 1, memo))
+            } else {
+                // 单星号：不跨目录分隔符。
+                matches_from(pattern, resource, pi + 1, ri, memo)
+                    || (ri < resource.len()
+                        && resource[ri] != b'/'
+                        && matches_from(pattern, resource, pi, ri + 1, memo))
+            }
+        } else {
+            ri < resource.len()
+                && pattern[pi] == resource[ri]
+                && matches_from(pattern, resource, pi + 1, ri + 1, memo)
+        };
+
+        memo.insert((pi, ri), result);
+        result
+    }
+
+    matches_from(
+        pattern.as_bytes(),
+        resource.as_bytes(),
+        0,
+        0,
+        &mut HashMap::new(),
+    )
+}
+
+fn grant_key(principal: &str, capability: &str, resource: Option<&str>) -> GrantKey {
+    (
+        principal.to_string(),
+        capability.to_string(),
+        resource.map(|value| value.replace('\\', "/")),
+    )
+}
+
 /// 权限引擎（Tauri managed state）
 pub struct PermissionEngine {
-    /// (principal, capability) -> scope；Session 授权只活在内存，Always 同步持久化
-    grants: Mutex<HashMap<(String, String), Scope>>,
+    /// (principal, capability, resource) -> scope；Session 授权只活在内存，Always 同步持久化
+    grants: Mutex<HashMap<GrantKey, Scope>>,
     /// request_id -> 等待审批的 channel
     pending: Mutex<HashMap<String, oneshot::Sender<PendingResponse>>>,
     /// Always 授权持久化路径（config_dir/permissions.json）
@@ -133,9 +208,14 @@ impl PermissionEngine {
     /// 以显式路径构造（测试可用临时目录与短超时）
     pub fn new(store_path: PathBuf, audit_path: PathBuf, approval_timeout: Duration) -> Result<Self> {
         let persisted = store::load_grants(&store_path)?;
-        let grants: HashMap<(String, String), Scope> = persisted
+        let grants: HashMap<GrantKey, Scope> = persisted
             .into_iter()
-            .map(|g| ((g.principal, g.capability), g.scope))
+            .map(|g| {
+                (
+                    grant_key(&g.principal, &g.capability, g.resource.as_deref()),
+                    g.scope,
+                )
+            })
             .collect();
 
         let audit = AuditLog::open(&audit_path)?;
@@ -151,31 +231,48 @@ impl PermissionEngine {
         })
     }
 
-    /// 检查插件声明的权限是否覆盖 capability
+    /// 检查插件声明的权限是否覆盖 capability + resource。
     ///
-    /// 匹配规则（迁移自 plugin/permission.rs）：
-    /// - 精确匹配："clipboard.read" 声明覆盖 "clipboard.read"
-    /// - 冒号 scope：声明 "fs.read:/Users/**" 或 "fs.read" 覆盖 "fs.read:/a/b"
-    /// - 模块级通配："fs.*" 覆盖 "fs.read"、"fs.write"
-    pub fn declared(permissions: &[String], capability: &str) -> bool {
-        let base = capability.split(':').next().unwrap_or(capability);
+    /// 匹配规则：
+    /// - `clipboard.read` 精确覆盖无资源的 clipboard.read；
+    /// - 对 resource-bearing API，裸 `fs.read` 表示允许该 capability 访问任意资源；
+    /// - `fs.read:/Users/**` 只覆盖匹配该模式的资源；
+    /// - `fs.*` 覆盖 fs 模块全部 capability；
+    /// - `fs.*:/Users/**` 覆盖 fs 模块内、且资源命中该模式的 capability；
+    /// - 动态 capability（如 `mcp.call:mcp__server__tool`）按完整字符串精确比较，
+    ///   不把 capability 自身的冒号误当成 resource scope。
+    pub fn declared(
+        permissions: &[String],
+        capability: &str,
+        resource: Option<&str>,
+    ) -> bool {
+        let module = capability.split('.').next().unwrap_or(capability);
+        let module_wildcard = format!("{}.*", module);
 
-        for p in permissions {
-            // 精确匹配
-            if p == capability {
+        for permission in permissions {
+            // 裸 capability 或模块通配允许该 capability；若调用带 resource，则表示该 capability 的资源不受 manifest 进一步限制。
+            if permission == capability || permission == &module_wildcard {
                 return true;
             }
 
-            // 声明的 base 与 capability 的 base 相同（声明可带 scope）
-            let p_base = p.split(':').next().unwrap_or(p);
-            if p_base == base {
-                return true;
+            let Some(resource) = resource else {
+                continue;
+            };
+
+            // 精确 capability + resource pattern，例如 fs.read:/Users/**。
+            let capability_prefix = format!("{}:", capability);
+            if let Some(pattern) = permission.strip_prefix(&capability_prefix) {
+                if resource_matches(pattern, resource) {
+                    return true;
+                }
             }
 
-            // 模块级通配："fs.*"
-            let module = base.split('.').next().unwrap_or(base);
-            if p == &format!("{}.*", module) {
-                return true;
+            // 模块 wildcard + resource pattern，例如 fs.*:/Users/**。
+            let wildcard_prefix = format!("{}:", module_wildcard);
+            if let Some(pattern) = permission.strip_prefix(&wildcard_prefix) {
+                if resource_matches(pattern, resource) {
+                    return true;
+                }
             }
         }
 
@@ -191,7 +288,7 @@ impl PermissionEngine {
         resource: Option<&str>,
     ) -> Result<()> {
         let meta = capability_meta(capability);
-        let key = (principal.to_string(), capability.to_string());
+        let key = grant_key(principal, capability, resource);
 
         let existing = self
             .grants
@@ -202,7 +299,7 @@ impl PermissionEngine {
 
         match decide(true, meta.risk, existing) {
             Decision::Allow => {
-                // Once 授权用完即删
+                // Once 授权如果未来被加入表，则用完即删；当前 Once 仍只放行当前一次。
                 if existing == Some(Scope::Once) {
                     if let Ok(mut grants) = self.grants.lock() {
                         grants.remove(&key);
@@ -269,7 +366,8 @@ impl PermissionEngine {
         Ok((request_id, rx))
     }
 
-    /// 等待审批响应：超时视为 Deny；允许时按 scope 记录授权
+    /// 等待审批响应：超时视为 Deny；允许时按 scope 记录授权。
+    /// Session / Always 授权与当前 resource 精确绑定。
     pub async fn wait_for_response(
         &self,
         request_id: &str,
@@ -285,7 +383,7 @@ impl PermissionEngine {
             Ok(Ok(PendingResponse { allow: true, scope })) => {
                 // Once 不落授权表（仅放行本次调用）；Session/Always 记录
                 if scope != Scope::Once {
-                    self.record_grant(principal, capability, scope)?;
+                    self.record_grant(principal, capability, resource, scope)?;
                 }
                 self.audit(principal, capability, resource, "allow", Some(scope));
                 Ok(())
@@ -330,11 +428,12 @@ impl PermissionEngine {
 
         Ok(grants
             .iter()
-            .map(|((principal, capability), scope)| {
+            .map(|((principal, capability, resource), scope)| {
                 let meta = capability_meta(capability);
                 GrantInfo {
                     plugin_id: principal.clone(),
                     capability: capability.clone(),
+                    resource: resource.clone(),
                     scope: *scope,
                     risk: meta.risk,
                     description: meta.description,
@@ -343,28 +442,61 @@ impl PermissionEngine {
             .collect())
     }
 
-    /// 撤销授权
-    pub fn revoke(&self, principal: &str, capability: &str) -> Result<()> {
-        let removed = self
-            .grants
-            .lock()
-            .map_err(|_| VoloError::Other("Permission lock error".to_string()))?
-            .remove(&(principal.to_string(), capability.to_string()));
+    /// 撤销授权。
+    /// 指定 resource 时只撤销该资源；resource=None 时撤销同 principal + capability 下的全部资源授权，
+    /// 保持旧版设置页调用也能安全地“一次撤干净”。
+    pub fn revoke(
+        &self,
+        principal: &str,
+        capability: &str,
+        resource: Option<&str>,
+    ) -> Result<()> {
+        let normalized_resource = resource.map(|value| value.replace('\\', "/"));
+        let mut removed_always = false;
 
-        if removed == Some(Scope::Always) {
+        {
+            let mut grants = self
+                .grants
+                .lock()
+                .map_err(|_| VoloError::Other("Permission lock error".to_string()))?;
+
+            grants.retain(|(grant_principal, grant_capability, grant_resource), scope| {
+                let matches_base = grant_principal == principal && grant_capability == capability;
+                let matches_resource = match normalized_resource.as_ref() {
+                    Some(resource) => grant_resource.as_ref() == Some(resource),
+                    None => true,
+                };
+                let remove = matches_base && matches_resource;
+                if remove && *scope == Scope::Always {
+                    removed_always = true;
+                }
+                !remove
+            });
+        }
+
+        if removed_always {
             self.persist_always_grants()?;
         }
 
-        info!("Revoked permission '{}' for '{}'", capability, principal);
+        info!(
+            "Revoked permission '{}' for '{}' resource={:?}",
+            capability, principal, resource
+        );
         Ok(())
     }
 
     /// 记录授权；Always 同步持久化
-    fn record_grant(&self, principal: &str, capability: &str, scope: Scope) -> Result<()> {
+    fn record_grant(
+        &self,
+        principal: &str,
+        capability: &str,
+        resource: Option<&str>,
+        scope: Scope,
+    ) -> Result<()> {
         self.grants
             .lock()
             .map_err(|_| VoloError::Other("Permission lock error".to_string()))?
-            .insert((principal.to_string(), capability.to_string()), scope);
+            .insert(grant_key(principal, capability, resource), scope);
 
         if scope == Scope::Always {
             self.persist_always_grants()?;
@@ -382,9 +514,10 @@ impl PermissionEngine {
         let always: Vec<Grant> = grants
             .iter()
             .filter(|(_, scope)| **scope == Scope::Always)
-            .map(|((principal, capability), scope)| Grant {
+            .map(|((principal, capability, resource), scope)| Grant {
                 principal: principal.clone(),
                 capability: capability.clone(),
+                resource: resource.clone(),
                 scope: *scope,
             })
             .collect();
@@ -442,41 +575,111 @@ mod tests {
         list.iter().map(|s| s.to_string()).collect()
     }
 
-    // ---- 迁移自 plugin/permission.rs 的匹配测试 ----
+    // ---- 声明匹配 ----
 
     #[test]
     fn test_declared_exact_match() {
         let permissions = perms(&["clipboard.read", "fs.read"]);
-        assert!(PermissionEngine::declared(&permissions, "clipboard.read"));
-        assert!(PermissionEngine::declared(&permissions, "fs.read"));
-        assert!(!PermissionEngine::declared(&permissions, "clipboard.write"));
-        assert!(!PermissionEngine::declared(&permissions, "shell.execute"));
+        assert!(PermissionEngine::declared(&permissions, "clipboard.read", None));
+        assert!(PermissionEngine::declared(&permissions, "fs.read", None));
+        assert!(PermissionEngine::declared(
+            &permissions,
+            "fs.read",
+            Some("/tmp/a.txt")
+        ));
+        assert!(!PermissionEngine::declared(
+            &permissions,
+            "clipboard.write",
+            None
+        ));
+        assert!(!PermissionEngine::declared(
+            &permissions,
+            "shell.execute",
+            None
+        ));
     }
 
     #[test]
     fn test_declared_wildcard() {
         let permissions = perms(&["fs.*"]);
-        assert!(PermissionEngine::declared(&permissions, "fs.read"));
-        assert!(PermissionEngine::declared(&permissions, "fs.write"));
-        assert!(!PermissionEngine::declared(&permissions, "clipboard.read"));
+        assert!(PermissionEngine::declared(&permissions, "fs.read", None));
+        assert!(PermissionEngine::declared(
+            &permissions,
+            "fs.write",
+            Some("/tmp/a")
+        ));
+        assert!(!PermissionEngine::declared(
+            &permissions,
+            "clipboard.read",
+            None
+        ));
     }
 
     #[test]
     fn test_declared_empty_denies_all() {
         let permissions = perms(&[]);
-        assert!(!PermissionEngine::declared(&permissions, "clipboard.read"));
-        assert!(!PermissionEngine::declared(&permissions, "db.read"));
+        assert!(!PermissionEngine::declared(
+            &permissions,
+            "clipboard.read",
+            None
+        ));
+        assert!(!PermissionEngine::declared(&permissions, "db.read", None));
     }
 
     #[test]
-    fn test_declared_scope_match() {
-        // 声明带 scope："fs.read:/Users/**" 覆盖 "fs.read" 及 "fs.read:/a/b"
+    fn test_declared_resource_scope_match() {
         let permissions = perms(&["fs.read:/Users/**"]);
-        assert!(PermissionEngine::declared(&permissions, "fs.read"));
-        assert!(PermissionEngine::declared(&permissions, "fs.read:/a/b"));
-        // capability 带 scope 时，裸声明 "fs.read" 也覆盖
-        assert!(PermissionEngine::declared(&perms(&["fs.read"]), "fs.read:/a/b"));
-        assert!(!PermissionEngine::declared(&permissions, "fs.write:/a/b"));
+        assert!(PermissionEngine::declared(
+            &permissions,
+            "fs.read",
+            Some("/Users/azra/Documents/a.txt")
+        ));
+        assert!(!PermissionEngine::declared(
+            &permissions,
+            "fs.read",
+            Some("/tmp/a.txt")
+        ));
+        // 有资源 scope 的声明不能退化成无资源的全局声明。
+        assert!(!PermissionEngine::declared(&permissions, "fs.read", None));
+
+        // 单星号不跨目录。
+        assert!(PermissionEngine::declared(
+            &perms(&["fs.read:/Users/*/a.txt"]),
+            "fs.read",
+            Some("/Users/me/a.txt")
+        ));
+        assert!(!PermissionEngine::declared(
+            &perms(&["fs.read:/Users/*/a.txt"]),
+            "fs.read",
+            Some("/Users/me/sub/a.txt")
+        ));
+
+        // 模块通配也可带资源 scope。
+        assert!(PermissionEngine::declared(
+            &perms(&["fs.*:/Users/**"]),
+            "fs.write",
+            Some("/Users/me/out.txt")
+        ));
+        assert!(!PermissionEngine::declared(
+            &perms(&["fs.*:/Users/**"]),
+            "fs.write",
+            Some("/tmp/out.txt")
+        ));
+    }
+
+    #[test]
+    fn test_dynamic_capability_colon_is_not_resource_scope() {
+        let capability = "mcp.call:mcp__server__tool";
+        assert!(PermissionEngine::declared(
+            &perms(&[capability]),
+            capability,
+            None
+        ));
+        assert!(!PermissionEngine::declared(
+            &perms(&["mcp.call:mcp__other__tool"]),
+            capability,
+            None
+        ));
     }
 
     // ---- 决策矩阵 ----
@@ -520,7 +723,13 @@ mod tests {
         });
 
         let result = engine
-            .wait_for_response(&request_id, "plugin-a", "clipboard.read", None, rx)
+            .wait_for_response(
+                &request_id,
+                "plugin-a",
+                "clipboard.read",
+                None,
+                rx,
+            )
             .await;
         assert!(result.is_ok());
 
@@ -529,10 +738,68 @@ mod tests {
         assert_eq!(grants.len(), 1);
         assert_eq!(grants[0].plugin_id, "plugin-a");
         assert_eq!(grants[0].capability, "clipboard.read");
+        assert!(grants[0].resource.is_none());
         assert_eq!(grants[0].scope, Scope::Session);
 
         // Session 授权不持久化
         assert!(!dir.join("permissions.json").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn test_resource_grants_are_isolated() {
+        let (engine, dir) = temp_engine("resource_isolation", Duration::from_secs(5));
+
+        let (request_id, rx) = engine.begin_request().unwrap();
+        engine.respond(&request_id, true, Scope::Session).unwrap();
+        engine
+            .wait_for_response(
+                &request_id,
+                "plugin-a",
+                "fs.read",
+                Some("/A/file.txt"),
+                rx,
+            )
+            .await
+            .unwrap();
+
+        let grants = engine.grants.lock().unwrap();
+        assert_eq!(
+            grants.get(&grant_key(
+                "plugin-a",
+                "fs.read",
+                Some("/A/file.txt")
+            )),
+            Some(&Scope::Session)
+        );
+        assert!(grants
+            .get(&grant_key(
+                "plugin-a",
+                "fs.read",
+                Some("/B/file.txt")
+            ))
+            .is_none());
+        drop(grants);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn test_legacy_unscoped_grant_does_not_cover_resource_call() {
+        let (engine, dir) = temp_engine("legacy_unscoped", Duration::from_secs(5));
+        engine
+            .record_grant("plugin-a", "fs.read", None, Scope::Session)
+            .unwrap();
+
+        let grants = engine.grants.lock().unwrap();
+        assert!(grants
+            .get(&grant_key("plugin-a", "fs.read", None))
+            .is_some());
+        assert!(grants
+            .get(&grant_key("plugin-a", "fs.read", Some("/tmp/a")))
+            .is_none());
+        drop(grants);
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -544,7 +811,7 @@ mod tests {
         engine.respond(&request_id, true, Scope::Once).unwrap();
 
         let result = engine
-            .wait_for_response(&request_id, "plugin-a", "fs.read", None, rx)
+            .wait_for_response(&request_id, "plugin-a", "fs.read", Some("/tmp/a"), rx)
             .await;
         assert!(result.is_ok());
         // Once 不记录授权
@@ -554,18 +821,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_respond_always_persisted() {
+    async fn test_respond_always_persisted_with_resource() {
         let (engine, dir) = temp_engine("always", Duration::from_secs(5));
 
         let (request_id, rx) = engine.begin_request().unwrap();
         engine.respond(&request_id, true, Scope::Always).unwrap();
 
         engine
-            .wait_for_response(&request_id, "plugin-a", "fs.write", Some("/tmp/x"), rx)
+            .wait_for_response(
+                &request_id,
+                "plugin-a",
+                "fs.write",
+                Some("/tmp/x"),
+                rx,
+            )
             .await
             .unwrap();
 
-        // 已持久化，新引擎实例能加载
+        // 已持久化，新引擎实例能加载，并且 resource 仍保留
         let engine2 = PermissionEngine::new(
             dir.join("permissions.json"),
             dir.join("audit.db"),
@@ -575,11 +848,35 @@ mod tests {
         let grants = engine2.list_grants().unwrap();
         assert_eq!(grants.len(), 1);
         assert_eq!(grants[0].scope, Scope::Always);
+        assert_eq!(grants[0].resource.as_deref(), Some("/tmp/x"));
 
-        // 撤销后持久化文件同步更新
-        engine2.revoke("plugin-a", "fs.write").unwrap();
+        // 精确撤销后持久化文件同步更新
+        engine2
+            .revoke("plugin-a", "fs.write", Some("/tmp/x"))
+            .unwrap();
         let loaded = store::load_grants(&dir.join("permissions.json")).unwrap();
         assert!(loaded.is_empty());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn test_revoke_without_resource_removes_all_resource_variants() {
+        let (engine, dir) = temp_engine("revoke_all", Duration::from_secs(5));
+        engine
+            .record_grant("plugin-a", "fs.read", Some("/a"), Scope::Session)
+            .unwrap();
+        engine
+            .record_grant("plugin-a", "fs.read", Some("/b"), Scope::Session)
+            .unwrap();
+        engine
+            .record_grant("plugin-a", "fs.write", Some("/c"), Scope::Session)
+            .unwrap();
+
+        engine.revoke("plugin-a", "fs.read", None).unwrap();
+        let grants = engine.list_grants().unwrap();
+        assert_eq!(grants.len(), 1);
+        assert_eq!(grants[0].capability, "fs.write");
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -592,7 +889,7 @@ mod tests {
         engine.respond(&request_id, false, Scope::Once).unwrap();
 
         let result = engine
-            .wait_for_response(&request_id, "plugin-a", "fs.read", None, rx)
+            .wait_for_response(&request_id, "plugin-a", "fs.read", Some("/tmp/a"), rx)
             .await;
         assert!(matches!(result, Err(VoloError::PermissionDenied(_))));
         assert!(engine.list_grants().unwrap().is_empty());
