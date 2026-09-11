@@ -145,23 +145,39 @@ fn read_config(path: &Path) -> Result<AppConfig> {
 }
 
 /// 写入包含凭证的配置文件。
-/// Unix/macOS 下强制使用 0600，避免 API key / MCP env 因默认 umask 生成可被其他本机用户读取的文件。
+/// Unix/macOS 下使用同目录私有临时文件 + fsync + rename，避免进程在 truncate 后、写完前退出导致配置损坏。
+/// 临时文件与最终文件均为 0600；rename 在同一文件系统内原子替换旧配置。
 fn write_private_config(path: &Path, content: &str) -> Result<()> {
     #[cfg(unix)]
     {
         use std::io::Write;
         use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
-        let mut file = std::fs::OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(path)?;
-        file.write_all(content.as_bytes())?;
-        file.sync_all()?;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
-        return Ok(());
+        let temp_path = path.with_extension(format!("tmp-{}", uuid::Uuid::new_v4()));
+        let write_result = (|| -> Result<()> {
+            let mut file = std::fs::OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .mode(0o600)
+                .open(&temp_path)?;
+            file.write_all(content.as_bytes())?;
+            file.sync_all()?;
+            std::fs::set_permissions(&temp_path, std::fs::Permissions::from_mode(0o600))?;
+            std::fs::rename(&temp_path, path)?;
+
+            // 尽力同步父目录中的 rename 元数据；不支持目录 fsync 的文件系统不应阻断正常保存。
+            if let Some(parent) = path.parent() {
+                if let Ok(dir) = std::fs::File::open(parent) {
+                    let _ = dir.sync_all();
+                }
+            }
+            Ok(())
+        })();
+
+        if write_result.is_err() {
+            let _ = std::fs::remove_file(&temp_path);
+        }
+        return write_result;
     }
 
     #[cfg(not(unix))]
@@ -483,6 +499,25 @@ mod tests {
         harden_config_dir(dir).unwrap();
         let dir_mode = std::fs::metadata(dir).unwrap().permissions().mode() & 0o777;
         assert_eq!(dir_mode, 0o700);
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_private_config_atomically_replaces_existing_file() {
+        let path = temp_config_path("atomic_replace");
+        write_private_config(&path, "old").unwrap();
+        write_private_config(&path, "new").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "new");
+
+        let dir = path.parent().unwrap();
+        let leftovers = std::fs::read_dir(dir)
+            .unwrap()
+            .flatten()
+            .filter(|entry| entry.file_name().to_string_lossy().contains("tmp-"))
+            .count();
+        assert_eq!(leftovers, 0);
 
         let _ = std::fs::remove_dir_all(dir);
     }
