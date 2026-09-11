@@ -131,6 +131,7 @@ pub fn run() {
             plugin::manager::list_plugins,
             plugin::manager::get_plugin,
             plugin::manager::scan_plugins,
+            plugin::manager::set_plugin_enabled,
             plugin::manager::install_plugin,
             plugin::manager::install_plugin_from_dir,
             plugin::manager::uninstall_plugin,
