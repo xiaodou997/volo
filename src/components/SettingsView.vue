@@ -4,7 +4,6 @@
 
 <template>
   <div class="settings-view">
-    <!-- 顶部导航 -->
     <div class="settings-header">
       <button class="back-btn" @click="$emit('back')">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -162,7 +161,6 @@
         @save-api-key="saveApiKey"
       />
 
-      <!-- MCP 服务器 -->
       <section class="settings-section">
         <h3 class="section-title">MCP 服务器</h3>
 
@@ -223,34 +221,13 @@
         <div v-if="mcpFormError" class="mcp-form-error">{{ mcpFormError }}</div>
       </section>
 
-      <section class="settings-section">
-        <h3 class="section-title">技能</h3>
-
-        <div class="mcp-hint">
-          技能是包含 SKILL.md 的目录，向内置 Agent 提供可复用的任务指令。配置即信任——请只添加你信任的技能。增删后下次问 AI 时生效。
-        </div>
-
-        <div v-if="skills.length === 0" class="grants-empty">暂无已安装技能</div>
-
-        <div v-for="skill in skills" :key="skill.name" class="setting-item">
-          <div class="setting-label">
-            <span class="label-text">
-              {{ skill.name }}
-              <span v-if="skill.version" class="skill-version">v{{ skill.version }}</span>
-            </span>
-            <span class="label-desc">{{ skill.description || '（无描述）' }}</span>
-          </div>
-          <div class="setting-control">
-            <button class="danger-btn" @click="removeSkill(skill.name)">删除</button>
-          </div>
-        </div>
-
-        <div class="mcp-add-form">
-          <button class="action-btn" @click="addSkill">从目录安装…</button>
-          <button class="action-btn" @click="openSkillsDir">打开技能目录</button>
-        </div>
-        <div v-if="skillError" class="mcp-form-error">{{ skillError }}</div>
-      </section>
+      <SkillSettingsSection
+        :skills="skills"
+        :error="skillError"
+        @install="addSkill"
+        @remove="removeSkill"
+        @open-dir="openSkillsDir"
+      />
 
       <PermissionSettingsSection :grants="grants" @revoke="revokeGrant" />
 
@@ -315,11 +292,8 @@ import { hideOnBlur } from '../composables/appConfig';
 import type { LlmConfig, McpServerConfig, PermissionGrant, SkillMeta } from '../api/rubick';
 import AiSettingsSection from './settings/AiSettingsSection.vue';
 import PermissionSettingsSection from './settings/PermissionSettingsSection.vue';
+import SkillSettingsSection from './settings/SkillSettingsSection.vue';
 import logoUrl from '../assets/logo.png';
-
-const emit = defineEmits<{
-  (e: 'back'): void;
-}>();
 
 const settings = ref({
   theme: 'system',
@@ -353,7 +327,7 @@ async function saveSettings() {
 
 function onThemeChange() {
   applyTheme(settings.value.theme);
-  saveSettings();
+  void saveSettings();
 }
 
 async function onDockIconChange() {
@@ -379,7 +353,7 @@ function applyTheme(theme: string) {
 
 function onOpacityChange() {
   document.documentElement.style.setProperty('--window-opacity', String(settings.value.opacity));
-  saveSettings();
+  void saveSettings();
 }
 
 async function onAutoLaunchChange() {
@@ -545,7 +519,7 @@ function addMcpServer() {
     [name]: { command, args, env: {}, url, enabled: true },
   };
   mcpForm.value = { name: '', command: '', args: '', url: '' };
-  saveMcpServers();
+  void saveMcpServers();
 }
 
 function toggleMcpServer(name: string) {
@@ -555,14 +529,14 @@ function toggleMcpServer(name: string) {
     ...mcpServers.value,
     [name]: { ...server, enabled: !server.enabled },
   };
-  saveMcpServers();
+  void saveMcpServers();
 }
 
 function removeMcpServer(name: string) {
   const next = { ...mcpServers.value };
   delete next[name];
   mcpServers.value = next;
-  saveMcpServers();
+  void saveMcpServers();
 }
 
 const skills = ref<SkillMeta[]>([]);
@@ -708,12 +682,12 @@ function handleSystemThemeChange() {
 }
 
 onMounted(() => {
-  loadSettings();
-  loadGrants();
-  loadLlmConfig();
-  loadMcpServers();
-  loadSkills();
-  loadAppVersion();
+  void loadSettings();
+  void loadGrants();
+  void loadLlmConfig();
+  void loadMcpServers();
+  void loadSkills();
+  void loadAppVersion();
   mediaQuery.addEventListener('change', handleSystemThemeChange);
 });
 
@@ -973,12 +947,6 @@ input[type="range"]::-webkit-slider-thumb {
   border-color: var(--accent-color);
 }
 
-.api-key-ok {
-  font-size: 12px;
-  color: #34c759;
-  white-space: nowrap;
-}
-
 .mcp-hint {
   padding: 4px 0 8px;
   font-size: 12px;
@@ -1008,46 +976,10 @@ input[type="range"]::-webkit-slider-thumb {
   color: var(--danger-color);
 }
 
-.skill-version {
-  margin-left: 6px;
-  font-size: 11px;
-  font-weight: 400;
-  color: var(--text-tertiary);
-}
-
 .grants-empty {
   padding: 12px 0;
   font-size: 13px;
   color: var(--text-tertiary);
-}
-
-.grant-resource {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  word-break: break-all;
-}
-
-.grant-risk {
-  margin-left: 6px;
-  padding: 1px 6px;
-  font-size: 11px;
-  font-weight: 600;
-  border-radius: 8px;
-}
-
-.grant-risk-low {
-  background: rgba(52, 199, 89, 0.15);
-  color: #34c759;
-}
-
-.grant-risk-medium {
-  background: rgba(255, 159, 10, 0.15);
-  color: #ff9f0a;
-}
-
-.grant-risk-high,
-.grant-risk-critical {
-  background: rgba(255, 59, 48, 0.15);
-  color: #ff3b30;
 }
 
 .about-info {
