@@ -10,6 +10,8 @@
 //! LLM 侧工具命名空间：`mcp__{sanitize(server)}__{sanitize(tool)}`，
 //! `mcp__` 为保留前缀（见 ai::plugin_tools 顶部注释）。
 
+mod protocol;
+
 use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::process::Stdio;
@@ -30,110 +32,17 @@ use crate::error::{Result, VoloError};
 use super::plugin_tools::sanitize;
 use super::tools::ToolSpec;
 
-/// 握手采用的 MCP 协议版本
-const PROTOCOL_VERSION: &str = "2024-11-05";
+pub use protocol::McpToolInfo;
+use protocol::{
+    extract_tool_text, parse_sse_response, parse_tools_list, rpc_outcome, PROTOCOL_VERSION,
+};
+
 /// 单 server 连接（含握手 + tools/list）超时
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// 单次 tools/call 超时
 pub const CALL_TIMEOUT: Duration = Duration::from_secs(30);
 /// LLM 工具名的 MCP 命名空间前缀
 pub const MCP_NAME_PREFIX: &str = "mcp__";
-
-/// MCP server 暴露的工具（原始名，未经 sanitize）
-#[derive(Debug, Clone)]
-pub struct McpToolInfo {
-    pub name: String,
-    pub description: Option<String>,
-    pub input_schema: Value,
-}
-
-/// 从 JSON-RPC 响应消息提取 result / error（stdio 读循环与 HTTP 响应共用）
-fn rpc_outcome(msg: &Value) -> Result<Value> {
-    if let Some(error) = msg.get("error") {
-        return Err(VoloError::Other(format!(
-            "MCP error {}: {}",
-            error["code"],
-            error["message"].as_str().unwrap_or("未知错误")
-        )));
-    }
-    Ok(msg.get("result").cloned().unwrap_or(Value::Null))
-}
-
-/// 解析 tools/list 的 result 为工具信息数组（两种 transport 共用）
-fn parse_tools_list(result: &Value) -> Vec<McpToolInfo> {
-    result
-        .get("tools")
-        .and_then(Value::as_array)
-        .map(|tools| {
-            tools
-                .iter()
-                .filter_map(|tool| {
-                    let name = tool.get("name")?.as_str()?.to_string();
-                    Some(McpToolInfo {
-                        name,
-                        description: tool
-                            .get("description")
-                            .and_then(Value::as_str)
-                            .map(|s| s.to_string()),
-                        input_schema: tool
-                            .get("inputSchema")
-                            .cloned()
-                            .unwrap_or_else(|| json!({ "type": "object", "properties": {} })),
-                    })
-                })
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-/// 从 tools/call 的 result 提取 text 类型 content 拼接；isError 为 true 时返回 Err
-/// （两种 transport 共用）
-fn extract_tool_text(result: &Value, name: &str) -> Result<Value> {
-    let text = result
-        .get("content")
-        .and_then(Value::as_array)
-        .map(|content| {
-            content
-                .iter()
-                .filter(|item| item.get("type").and_then(Value::as_str) == Some("text"))
-                .filter_map(|item| item.get("text").and_then(Value::as_str))
-                .collect::<Vec<_>>()
-                .join("\n")
-        })
-        .unwrap_or_default();
-
-    if result
-        .get("isError")
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-    {
-        return Err(VoloError::Other(format!("MCP 工具 {} 执行失败: {}", name, text)));
-    }
-    Ok(Value::String(text))
-}
-
-/// 从 SSE 响应体中逐帧解析 data 行，找与请求 id 匹配的 JSON-RPC 响应
-fn parse_sse_response(body: &str, id: u64) -> Result<Value> {
-    for line in body.lines() {
-        let Some(data) = line.strip_prefix("data:") else {
-            continue;
-        };
-        let data = data.trim();
-        if data.is_empty() {
-            continue;
-        }
-        let Ok(msg) = serde_json::from_str::<Value>(data) else {
-            continue;
-        };
-        if msg.get("id").and_then(Value::as_u64) == Some(id) {
-            return rpc_outcome(&msg);
-        }
-    }
-    Err(VoloError::Other(format!(
-        "MCP SSE 响应中没有 id={} 的响应",
-        id
-    )))
-}
 
 /// 一条 MCP stdio 连接：写端 + pending 分发表；读端由后台 task 消费
 ///
@@ -634,9 +543,7 @@ impl McpRegistry {
     /// 按 LLM 名调用：`mcp__` 前缀剥掉后按第一个 `__` 切分，
     /// 以 sanitize 后的名字反查原始 server / tool
     pub async fn call(&self, llm_name: &str, args: Value) -> Result<Value> {
-        let not_found = || {
-            VoloError::NotFound(format!("mcp tool: {}", llm_name))
-        };
+        let not_found = || VoloError::NotFound(format!("mcp tool: {}", llm_name));
         let rest = llm_name
             .strip_prefix(MCP_NAME_PREFIX)
             .ok_or_else(not_found)?;
@@ -724,7 +631,7 @@ mod tests {
                         "serverInfo": { "name": "mock", "version": "0.1.0" },
                     }
                 })),
-                "notifications/initialized" => None, // notification 无响应
+                "notifications/initialized" => None,
                 "tools/list" => Some(json!({
                     "jsonrpc": "2.0",
                     "id": id,
@@ -786,9 +693,7 @@ mod tests {
         }
     }
 
-    /// 建立一对连接（client 侧已握手）
-    async fn connected_pair(
-    ) -> McpConnection<ReadHalf<DuplexStream>, WriteHalf<DuplexStream>> {
+    async fn connected_pair() -> McpConnection<ReadHalf<DuplexStream>, WriteHalf<DuplexStream>> {
         let (client, server) = duplex(4096);
         tokio::spawn(run_mock_server(server));
         let (client_read, client_write) = tokio::io::split(client);
@@ -797,7 +702,6 @@ mod tests {
             .expect("handshake failed")
     }
 
-    /// 握手 + tools/list 全流程
     #[tokio::test]
     async fn test_connect_handshake_and_list_tools() {
         let conn = connected_pair().await;
@@ -806,12 +710,10 @@ mod tests {
         assert_eq!(tools[0].name, "echo.tool");
         assert_eq!(tools[0].description.as_deref(), Some("回显输入"));
         assert_eq!(tools[0].input_schema["type"], "object");
-        // description 缺省的工具也能解析
         assert_eq!(tools[1].name, "fail");
         assert!(tools[1].description.is_none());
     }
 
-    /// tools/call：只拼接 text 类型 content
     #[tokio::test]
     async fn test_call_tool_concatenates_text_content() {
         let conn = connected_pair().await;
@@ -822,7 +724,6 @@ mod tests {
         assert_eq!(result, Value::String("pong:\nhello".to_string()));
     }
 
-    /// isError 为 true 时返回 Err
     #[tokio::test]
     async fn test_call_tool_is_error() {
         let conn = connected_pair().await;
@@ -830,7 +731,6 @@ mod tests {
         assert!(err.to_string().contains("boom"));
     }
 
-    /// server 返回 JSON-RPC error → Err
     #[tokio::test]
     async fn test_call_tool_json_rpc_error() {
         let conn = connected_pair().await;
@@ -838,11 +738,9 @@ mod tests {
         assert!(err.to_string().contains("tool not found"));
     }
 
-    /// server 不响应时调用超时
     #[tokio::test]
     async fn test_call_tool_timeout() {
         let (client, mut server) = duplex(4096);
-        // server 只读不写，永不响应
         tokio::spawn(async move {
             let mut buf = vec![0u8; 1024];
             loop {
@@ -854,7 +752,6 @@ mod tests {
         });
         let (client_read, client_write) = tokio::io::split(client);
 
-        // 握手会超时：注入短超时
         let result = McpConnection::connect_with_timeout(
             client_read,
             client_write,
@@ -867,7 +764,6 @@ mod tests {
         }
     }
 
-    /// 握手成功后 call 超时（server 握手阶段响应、call 阶段静默）
     #[tokio::test]
     async fn test_call_tool_timeout_after_handshake() {
         let (client, server) = duplex(4096);
@@ -881,7 +777,6 @@ mod tests {
                 let Some(method) = msg.get("method").and_then(Value::as_str) else {
                     continue;
                 };
-                // 只响应 initialize 和 tools/list，tools/call 静默
                 let response = match method {
                     "initialize" => Some(json!({
                         "jsonrpc": "2.0", "id": msg["id"],
@@ -910,7 +805,6 @@ mod tests {
         assert!(err.to_string().contains("超时"));
     }
 
-    /// 并发 tools/call 按 id 正确分发（server 乱序响应也能对上）
     #[tokio::test]
     async fn test_concurrent_requests_match_by_id() {
         let (client, server) = duplex(4096);
@@ -937,9 +831,8 @@ mod tests {
                     Some("tools/call") => {
                         buffered_calls.push(msg);
                         if buffered_calls.len() < 2 {
-                            continue; // 攒够两个 call 再乱序回
+                            continue;
                         }
-                        // 逆序响应，echo 各自的参数
                         let mut out = String::new();
                         for call in buffered_calls.drain(..).rev() {
                             let text = call["params"]["arguments"]["text"].clone();
@@ -978,11 +871,8 @@ mod tests {
         assert_eq!(b.unwrap(), Value::String("B".to_string()));
     }
 
-    /// McpRegistry::specs 的命名与描述前缀
     #[test]
     fn test_registry_specs_naming() {
-        // 不经子进程，直接构造 registry 内部状态太重——
-        // 改为单测 sanitize 拼接规则，集成路径由 connect/call 测试覆盖
         let name = format!("{}__{}", sanitize("my.server"), sanitize("echo.tool"));
         assert_eq!(name, "my_server__echo_tool");
         let llm_name = format!("{}{}", MCP_NAME_PREFIX, name);
@@ -994,9 +884,6 @@ mod tests {
         );
     }
 
-    // ---- Streamable HTTP ----
-
-    /// rpc_outcome：result 直通，error 转 Err，缺 result 时为 Null
     #[test]
     fn test_rpc_outcome() {
         assert_eq!(
@@ -1009,7 +896,6 @@ mod tests {
         assert_eq!(rpc_outcome(&json!({ "id": 1 })).unwrap(), Value::Null);
     }
 
-    /// parse_sse_response：按 id 匹配 data 帧；非 data 行与其他 id 跳过
     #[test]
     fn test_parse_sse_response() {
         let body = "event: message\n\
@@ -1022,22 +908,16 @@ mod tests {
             parse_sse_response(body, 2).unwrap(),
             json!({ "ok": true })
         );
-        // 找不到匹配 id → Err
         assert!(parse_sse_response(body, 99).is_err());
-        // SSE 帧里的 JSON-RPC error 也要转成 Err
         let err_body = "data: {\"jsonrpc\":\"2.0\",\"id\":1,\"error\":{\"code\":-1,\"message\":\"bad\"}}\n\n";
         assert!(parse_sse_response(err_body, 1).unwrap_err().to_string().contains("bad"));
     }
 
-    /// Streamable HTTP 全流程（手写 mock server）：
-    /// initialize 下发 Mcp-Session-Id → 后续请求必须回带（不回带则 server 报错，握手失败）→
-    /// tools/list 走 JSON 响应 → tools/call 走 SSE 响应
     #[tokio::test]
     async fn test_http_connect_and_call() {
         use tokio::io::AsyncReadExt;
         use tokio::net::TcpListener;
 
-        /// 在 buffer 里找子串的起始位置
         fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
             haystack.windows(needle.len()).position(|w| w == needle)
         }
@@ -1048,7 +928,6 @@ mod tests {
         tokio::spawn(async move {
             while let Ok((mut sock, _)) = listener.accept().await {
                 tokio::spawn(async move {
-                    // 读请求头 + body（每个请求一条连接，Connection: close）
                     let mut buf: Vec<u8> = Vec::new();
                     let mut tmp = [0u8; 4096];
                     let header_end = loop {
@@ -1129,7 +1008,6 @@ mod tests {
                                 format!("event: message\ndata: {}\n\n", frame),
                             )
                         }
-                        // 未回带 session id 的请求一律拒绝（借此断言回带行为）
                         _ => (
                             "400 Bad Request",
                             "application/json",
@@ -1162,8 +1040,10 @@ mod tests {
         assert_eq!(tools.len(), 1);
         assert_eq!(tools[0].name, "ping");
 
-        // SSE 响应的 tools/call
-        let result = client.call_tool("ping", json!({ "text": "hello-http" })).await.unwrap();
+        let result = client
+            .call_tool("ping", json!({ "text": "hello-http" }))
+            .await
+            .unwrap();
         assert_eq!(result, Value::String("hello-http".to_string()));
     }
 }
