@@ -5,26 +5,16 @@
 
 <template>
   <div class="agent-view">
-    <!-- 顶部导航 -->
-    <div class="agent-header">
-      <button class="back-btn" @click="onBack">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M19 12H5M12 19l-7-7 7-7"/>
-        </svg>
-      </button>
-      <h2 class="title">{{ headerTitle }}</h2>
-      <span v-if="viewMode === 'chat' && !finished" class="running-dot"></span>
-      <div class="header-actions">
-        <button
-          v-if="viewMode === 'chat' && !finished"
-          class="header-btn stop-btn"
-          :disabled="stopping"
-          @click="stopSession"
-        >{{ stopping ? '停止中…' : '停止' }}</button>
-        <button v-if="viewMode === 'chat'" class="header-btn" @click="openHistory">历史</button>
-        <button class="header-btn" @click="newSession">新对话</button>
-      </div>
-    </div>
+    <AgentHeader
+      :title="headerTitle"
+      :chat-mode="viewMode === 'chat'"
+      :finished="finished"
+      :stopping="stopping"
+      @back="onBack"
+      @stop="stopSession"
+      @history="openHistory"
+      @new-session="newSession"
+    />
 
     <!-- 会话历史列表 -->
     <div v-if="viewMode === 'history'" class="agent-content">
@@ -82,7 +72,6 @@
         <template v-else>
           <div class="item-body markdown-body" v-html="renderMarkdown(item.text)"></div>
           <span v-if="item.streaming" class="stream-cursor"></span>
-          <!-- 回答操作：引用追问（仅实时会话结束后可用）/ 复制整条 -->
           <div
             v-if="item.kind === 'message' && !item.streaming && item.text"
             class="msg-actions"
@@ -97,7 +86,6 @@
               @click="copyMessage('msg-' + index, item.text)"
             >{{ copiedKey === 'msg-' + index ? '已复制 ✓' : '复制' }}</button>
           </div>
-          <!-- 失败重试：以最后一次提问参数重新发起会话 -->
           <button
             v-if="item.kind === 'error' && viewMode === 'chat' && finished && lastAsk"
             class="msg-action-btn retry-btn"
@@ -107,7 +95,6 @@
         </template>
       </div>
 
-      <!-- 完成 / 回放标记 -->
       <div v-if="viewMode === 'replay'" class="done-marker">— 回放 —</div>
       <div v-else-if="finished && !hasError" class="done-marker">✓ 已完成</div>
     </div>
@@ -122,38 +109,19 @@
       >{{ resuming ? '恢复中…' : '继续对话' }}</button>
     </div>
 
-    <!-- 追问输入栏（实时会话结束后才可用）；支持粘贴图片 / 文本文件作为附件 -->
-    <div v-if="viewMode === 'chat' && finished" class="follow-up-area">
-      <!-- 待发送附件 -->
-      <div v-if="pendingImages.length || pendingFiles.length" class="attachment-chips">
-        <span v-for="(img, i) in pendingImages" :key="'img' + i" class="chip">
-          <img :src="img" class="chip-thumb" alt="图片附件" />
-          <button class="chip-remove" @click="pendingImages.splice(i, 1)">×</button>
-        </span>
-        <span v-for="(f, i) in pendingFiles" :key="'file' + i" class="chip">
-          📎 {{ f.name }}
-          <button class="chip-remove" @click="pendingFiles.splice(i, 1)">×</button>
-        </span>
-      </div>
-      <div v-if="attachmentError" class="attachment-error">{{ attachmentError }}</div>
-      <div class="follow-up-bar">
-        <input
-          ref="followUpInputRef"
-          v-model="followUp"
-          type="text"
-          class="follow-up-input"
-          placeholder="继续追问…（可直接粘贴截图 / 文本文件）"
-          :disabled="!finished"
-          @keydown.enter="sendFollowUp"
-          @paste="onPaste"
-        />
-        <button
-          class="follow-up-send"
-          :disabled="!finished || (!followUp.trim() && !pendingImages.length && !pendingFiles.length)"
-          @click="sendFollowUp"
-        >发送</button>
-      </div>
-    </div>
+    <AgentFollowUp
+      v-if="viewMode === 'chat' && finished"
+      ref="followUpRef"
+      v-model="followUp"
+      :finished="finished"
+      :pending-images="pendingImages"
+      :pending-files="pendingFiles"
+      :attachment-error="attachmentError"
+      @paste="onPaste"
+      @send="sendFollowUp"
+      @remove-image="pendingImages.splice($event, 1)"
+      @remove-file="pendingFiles.splice($event, 1)"
+    />
   </div>
 </template>
 
@@ -164,6 +132,8 @@ import { invoke } from '@tauri-apps/api/core';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import type { AgentEvent, ReplayEvent, SessionMeta } from '../api/rubick';
+import AgentFollowUp from './agent/AgentFollowUp.vue';
+import AgentHeader from './agent/AgentHeader.vue';
 import {
   buildQueryWithTextAttachments,
   classifyAttachment,
@@ -175,7 +145,6 @@ import {
   type TimelineItem,
 } from '../agent/timeline';
 
-// LLM 输出按 Markdown 渲染；DOMPurify 消毒防注入（内容来自外部模型，不可信）
 marked.setOptions({ breaks: true });
 
 function renderMarkdown(text: string): string {
@@ -185,9 +154,7 @@ function renderMarkdown(text: string): string {
 
 const props = defineProps<{
   query: string;
-  // 打开方式：chat（默认，带上 query 立即发问）/ history（直达历史列表，不发问）
   initialMode?: 'chat' | 'history';
-  // @技能名 显式触发：首轮会话注入该技能完整指令
   skill?: string;
 }>();
 
@@ -195,7 +162,6 @@ const emit = defineEmits<{
   (e: 'exit'): void;
 }>();
 
-// 视图模式：实时会话 / 历史列表 / 历史回放
 type ViewMode = 'chat' | 'history' | 'replay';
 
 const timeline = ref<TimelineItem[]>([]);
@@ -204,13 +170,11 @@ const finished = ref(false);
 const contentRef = ref<HTMLElement | null>(null);
 
 const viewMode = ref<ViewMode>('chat');
-// 回放时间线独立于实时 timeline，返回实时会话时原样恢复
 const replayTimeline = ref<TimelineItem[]>([]);
 const sessions = ref<SessionMeta[]>([]);
 const sessionsLoading = ref(false);
 const sessionsError = ref('');
 const followUp = ref('');
-// 待发送附件（粘贴进输入框的图片 / 文本文件）
 const pendingImages = ref<string[]>([]);
 const pendingFiles = ref<TextAttachment[]>([]);
 const attachmentError = ref('');
@@ -224,8 +188,6 @@ function readAsDataURL(file: File): Promise<string> {
   });
 }
 
-// 粘贴附件：图片 → data URL 走多模态；文本类文件 → 内容并入消息正文。
-// 剪贴板里没有文件项时不接管，纯文本粘贴走默认行为
 async function onPaste(e: ClipboardEvent) {
   const files = Array.from(e.clipboardData?.items ?? [])
     .filter((item) => item.kind === 'file')
@@ -247,16 +209,14 @@ async function onPaste(e: ClipboardEvent) {
     pendingFiles.value.push({ name: file.name || '未命名.txt', text: await file.text() });
   }
 }
-// 停止按钮状态（等待后端 done 事件落地）
+
 const stopping = ref(false);
-// 从回放继续会话：当前回放的会话 id / 是否已恢复为实时会话 / 恢复中与错误状态
 const currentSessionId = ref<string | null>(null);
 const resumed = ref(false);
 const resuming = ref(false);
 const resumeError = ref('');
 
 const hasError = computed(() => timeline.value.some((item) => item.kind === 'error'));
-
 const displayTimeline = computed(() =>
   viewMode.value === 'replay' ? replayTimeline.value : timeline.value
 );
@@ -272,17 +232,12 @@ function formatTime(iso: string): string {
   return isNaN(d.getTime()) ? iso : d.toLocaleString();
 }
 
-// 返回键：回放 → 历史列表 → 实时会话 → 退出；
-// 历史直达入口（initialMode=history）没有实时会话可回，从历史列表直接退出
 function onBack() {
   if (viewMode.value === 'replay') {
     viewMode.value = 'history';
   } else if (viewMode.value === 'history') {
-    if (props.initialMode === 'history') {
-      emit('exit');
-    } else {
-      viewMode.value = 'chat';
-    }
+    if (props.initialMode === 'history') emit('exit');
+    else viewMode.value = 'chat';
   } else {
     emit('exit');
   }
@@ -315,8 +270,6 @@ async function openSession(sessionId: string) {
   }
 }
 
-// 从回放继续会话：后端恢复消息级历史后，把回放时间线并入实时时间线，
-// 切到 chat 模式（finished=true 使追问输入栏可用）
 async function resumeSession() {
   if (!currentSessionId.value || resuming.value) return;
   resumeError.value = '';
@@ -337,7 +290,6 @@ async function resumeSession() {
   }
 }
 
-// 新对话：清空后端会话历史后退出，回到启动器搜索框
 async function newSession() {
   try {
     await invoke('agent_new_session');
@@ -347,8 +299,6 @@ async function newSession() {
   emit('exit');
 }
 
-// 停止当前会话：置位取消标志，流式输出随下一个增量中断；
-// 完成后端会 emit done，handleEvent 把 finished 置 true
 async function stopSession() {
   if (stopping.value) return;
   stopping.value = true;
@@ -360,16 +310,13 @@ async function stopSession() {
   }
 }
 
-// 多轮追问：本地先压入 user 气泡（含附件展示），再发起新一轮 agent_ask
 async function sendFollowUp() {
   const q = followUp.value.trim();
   const images = [...pendingImages.value];
   const files = [...pendingFiles.value];
   if ((!q && !images.length && !files.length) || !finished.value) return;
 
-  // 文本文件内容并入消息正文（带文件名标注），LLM 直接可读；图片走多模态 parts 单独传
   const fullQuery = buildQueryWithTextAttachments(q, files);
-
   followUp.value = '';
   pendingImages.value = [];
   pendingFiles.value = [];
@@ -385,7 +332,6 @@ async function sendFollowUp() {
   finished.value = false;
   await scrollToBottom();
   try {
-    // 追问不带 skill：首轮已注入 system prompt，历史续接即可
     await invoke('agent_ask', { query: fullQuery, skill: null, images });
   } catch (e) {
     loading.value = false;
@@ -396,12 +342,9 @@ async function sendFollowUp() {
 
 async function scrollToBottom() {
   await nextTick();
-  if (contentRef.value) {
-    contentRef.value.scrollTop = contentRef.value.scrollHeight;
-  }
+  if (contentRef.value) contentRef.value.scrollTop = contentRef.value.scrollHeight;
 }
 
-// 复制反馈：key 区分消息/工具结果等不同来源的按钮
 const copiedKey = ref('');
 
 async function copyMessage(key: string, text: string) {
@@ -416,8 +359,7 @@ async function copyMessage(key: string, text: string) {
   }
 }
 
-// 引用追问：把回答原文以 Markdown 引用块填入追问输入框并聚焦
-const followUpInputRef = ref<HTMLInputElement | null>(null);
+const followUpRef = ref<InstanceType<typeof AgentFollowUp> | null>(null);
 
 function quoteMessage(text: string) {
   const quote =
@@ -426,17 +368,15 @@ function quoteMessage(text: string) {
       .map((line) => '> ' + line)
       .join('\n') + '\n\n';
   followUp.value = quote + followUp.value;
-  void nextTick(() => followUpInputRef.value?.focus());
+  void nextTick(() => followUpRef.value?.focus());
 }
 
-// 失败重试：记录最后一次提问参数（首轮带 skill，追问不带）
 const lastAsk = ref<{ query: string; skill: string | null; images: string[] | null } | null>(null);
 const retrying = ref(false);
 
 async function retryLastAsk() {
   if (!lastAsk.value || retrying.value) return;
   retrying.value = true;
-  // 移除末尾连续的 error 项，避免重试时错误堆叠
   while (timeline.value.length && timeline.value[timeline.value.length - 1].kind === 'error') {
     timeline.value.pop();
   }
@@ -454,9 +394,6 @@ async function retryLastAsk() {
   }
 }
 
-// 给渲染出的代码块注入复制按钮。
-// v-html 每次渲染都会重建 DOM（流式输出期间每个 delta 都会），
-// 所以要在每次渲染后重新增强；copy-enhanced 类防止重复注入
 async function enhanceCodeBlocks() {
   await nextTick();
   contentRef.value?.querySelectorAll('pre:not(.copy-enhanced)').forEach((pre) => {
@@ -466,7 +403,6 @@ async function enhanceCodeBlocks() {
     btn.textContent = '复制';
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
-      // 按钮自身在 pre 内，取 code 元素文本，兜底时剔除按钮节点
       const codeEl = pre.querySelector('code');
       const code =
         codeEl?.textContent ??
@@ -489,12 +425,8 @@ async function handleEvent(event: AgentEvent) {
   loading.value = false;
   const transition = reduceTimelineEvent(timeline.value, event);
   timeline.value = transition.timeline;
-  if (transition.finished !== undefined) {
-    finished.value = transition.finished;
-  }
-  if (transition.stopping !== undefined) {
-    stopping.value = transition.stopping;
-  }
+  if (transition.finished !== undefined) finished.value = transition.finished;
+  if (transition.stopping !== undefined) stopping.value = transition.stopping;
   await scrollToBottom();
   void enhanceCodeBlocks();
 }
@@ -502,11 +434,9 @@ async function handleEvent(event: AgentEvent) {
 let unlisten: UnlistenFn | null = null;
 
 onMounted(async () => {
-  // 先监听再发起会话，避免漏掉早期事件
   unlisten = await listen<AgentEvent>('agent-event', (event) => {
     void handleEvent(event.payload);
   });
-  // 历史直达：不发起会话，直接打开历史列表（之后可从回放恢复续聊）
   if (props.initialMode === 'history') {
     loading.value = false;
     finished.value = true;
@@ -535,53 +465,6 @@ onUnmounted(() => {
   flex-direction: column;
   height: 100%;
   background: var(--bg-primary);
-}
-
-.agent-header {
-  display: flex;
-  align-items: center;
-  padding: 12px 16px;
-  border-bottom: 1px solid var(--border-color);
-  background: var(--bg-secondary);
-}
-
-.back-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  border: none;
-  background: transparent;
-  color: var(--text-primary);
-  cursor: pointer;
-  border-radius: 6px;
-  transition: background 0.2s;
-}
-
-.back-btn:hover {
-  background: var(--hover-bg);
-}
-
-.title {
-  flex: 1;
-  margin-left: 12px;
-  font-size: 16px;
-  font-weight: 600;
-  color: var(--text-primary);
-}
-
-.running-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--accent-color);
-  animation: pulse 1s infinite;
-}
-
-@keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.3; }
 }
 
 .agent-content {
@@ -637,7 +520,6 @@ onUnmounted(() => {
   word-break: break-word;
 }
 
-/* Markdown 渲染内容（v-html 注入，scoped 需 :deep） */
 .markdown-body :deep(p) {
   margin: 0 0 8px;
 }
@@ -682,7 +564,6 @@ onUnmounted(() => {
   padding: 0;
 }
 
-/* 代码块复制按钮（JS 注入节点没有 scoped 属性，样式必须走 :deep） */
 .markdown-body :deep(.code-copy-btn) {
   position: absolute;
   top: 6px;
@@ -702,7 +583,6 @@ onUnmounted(() => {
   opacity: 1;
 }
 
-/* 整条回答的操作按钮组（悬停气泡时显示在右上角） */
 .timeline-message {
   position: relative;
 }
@@ -736,7 +616,6 @@ onUnmounted(() => {
   cursor: default;
 }
 
-/* 工具结果复制按钮（悬停时显示在右上角） */
 .timeline-tool_result {
   position: relative;
 }
@@ -753,7 +632,6 @@ onUnmounted(() => {
   opacity: 1;
 }
 
-/* 失败重试按钮（常显，跟在错误文本后） */
 .retry-btn {
   margin-top: 6px;
 }
@@ -781,7 +659,6 @@ onUnmounted(() => {
   font-size: 13px;
 }
 
-/* 流式输出中的闪烁光标 */
 .stream-cursor {
   display: inline-block;
   width: 8px;
@@ -807,34 +684,6 @@ onUnmounted(() => {
   color: var(--text-tertiary);
 }
 
-.header-actions {
-  display: flex;
-  gap: 4px;
-  margin-left: 8px;
-}
-
-.header-btn {
-  border: none;
-  background: transparent;
-  color: var(--text-secondary);
-  font-size: 13px;
-  padding: 4px 8px;
-  border-radius: 6px;
-  cursor: pointer;
-  transition: background 0.2s, color 0.2s;
-}
-
-.header-btn:hover {
-  background: var(--hover-bg);
-  color: var(--text-primary);
-}
-
-/* 停止按钮：hover 用警示色提示中断语义 */
-.stop-btn:hover {
-  color: var(--danger-color);
-}
-
-/* 追问/回放中的用户气泡在时间线内，去掉分隔线与额外内边距 */
 .timeline-user {
   border-bottom: none;
   padding: 0;
@@ -884,25 +733,6 @@ onUnmounted(() => {
   background: var(--bg-secondary);
 }
 
-.follow-up-input {
-  flex: 1;
-  border: none;
-  outline: none;
-  font-size: 14px;
-  padding: 8px 12px;
-  border-radius: 6px;
-  background: var(--bg-primary);
-  color: var(--text-primary);
-}
-
-.follow-up-input::placeholder {
-  color: var(--text-tertiary);
-}
-
-.follow-up-input:disabled {
-  opacity: 0.6;
-}
-
 .follow-up-send {
   border: none;
   border-radius: 6px;
@@ -919,7 +749,6 @@ onUnmounted(() => {
   cursor: default;
 }
 
-/* 回放底栏：错误文本占满剩余空间，按钮靠右 */
 .resume-error {
   flex: 1;
   padding: 0;
@@ -929,55 +758,6 @@ onUnmounted(() => {
   margin-left: auto;
 }
 
-/* 待发送附件 chips（追问输入栏上方） */
-.attachment-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  padding: 10px 16px 0;
-  background: var(--bg-secondary);
-}
-
-.chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  color: var(--text-secondary);
-  background: var(--bg-primary);
-  border: 1px solid var(--border-color);
-  border-radius: 6px;
-  padding: 4px 8px;
-}
-
-.chip-thumb {
-  width: 32px;
-  height: 32px;
-  object-fit: cover;
-  border-radius: 4px;
-}
-
-.chip-remove {
-  border: none;
-  background: none;
-  color: var(--text-tertiary);
-  cursor: pointer;
-  font-size: 14px;
-  padding: 0 2px;
-}
-
-.chip-remove:hover {
-  color: var(--danger-color);
-}
-
-.attachment-error {
-  font-size: 12px;
-  color: var(--danger-color);
-  padding: 6px 16px 0;
-  background: var(--bg-secondary);
-}
-
-/* 用户气泡里的附件展示 */
 .user-attachments {
   display: flex;
   gap: 6px;
