@@ -14,9 +14,7 @@
       <h2 class="title">设置</h2>
     </div>
 
-    <!-- 设置内容 -->
     <div class="settings-content">
-      <!-- 外观设置 -->
       <section class="settings-section">
         <h3 class="section-title">外观</h3>
 
@@ -53,10 +51,8 @@
         </div>
       </section>
 
-      <!-- 快捷键设置 -->
       <section class="settings-section">
         <h3 class="section-title">快捷键</h3>
-
         <div class="setting-item">
           <div class="setting-label">
             <span class="label-text">呼出窗口</span>
@@ -74,7 +70,6 @@
         </div>
       </section>
 
-      <!-- 通用设置 -->
       <section class="settings-section">
         <h3 class="section-title">通用</h3>
 
@@ -131,7 +126,6 @@
         </div>
       </section>
 
-      <!-- 数据管理 -->
       <section class="settings-section">
         <h3 class="section-title">数据</h3>
 
@@ -156,59 +150,17 @@
         </div>
       </section>
 
-      <!-- AI 设置 -->
-      <section class="settings-section">
-        <h3 class="section-title">AI 设置</h3>
-
-        <div class="setting-item">
-          <div class="setting-label">
-            <span class="label-text">Base URL</span>
-            <span class="label-desc">支持 OpenAI 兼容服务（如 DeepSeek）</span>
-          </div>
-          <div class="setting-control">
-            <input
-              type="text"
-              class="text-input"
-              v-model="llmConfig.baseUrl"
-              placeholder="https://api.openai.com/v1"
-              @blur="saveLlmConfig"
-            />
-          </div>
-        </div>
-
-        <div class="setting-item">
-          <div class="setting-label">
-            <span class="label-text">Model</span>
-            <span class="label-desc">模型名称</span>
-          </div>
-          <div class="setting-control">
-            <input
-              type="text"
-              class="text-input"
-              v-model="llmConfig.model"
-              placeholder="gpt-4o-mini / deepseek-chat"
-              @blur="saveLlmConfig"
-            />
-          </div>
-        </div>
-
-        <div class="setting-item">
-          <div class="setting-label">
-            <span class="label-text">API Key</span>
-            <span class="label-desc">明文保存在本地配置文件（config.json），请勿外泄该文件</span>
-          </div>
-          <div class="setting-control">
-            <span v-if="hasApiKey" class="api-key-ok">已配置 ✓</span>
-            <input
-              type="password"
-              class="text-input"
-              v-model="apiKeyInput"
-              placeholder="sk-..."
-            />
-            <button class="action-btn" @click="saveApiKey">保存</button>
-          </div>
-        </div>
-      </section>
+      <AiSettingsSection
+        :base-url="llmConfig.baseUrl"
+        :model="llmConfig.model"
+        :api-key-input="apiKeyInput"
+        :has-api-key="hasApiKey"
+        @update-base-url="llmConfig.baseUrl = $event"
+        @update-model="llmConfig.model = $event"
+        @update-api-key-input="apiKeyInput = $event"
+        @save-config="saveLlmConfig"
+        @save-api-key="saveApiKey"
+      />
 
       <!-- MCP 服务器 -->
       <section class="settings-section">
@@ -241,7 +193,6 @@
           </div>
         </div>
 
-        <!-- 添加表单 -->
         <div class="mcp-add-form">
           <input
             type="text"
@@ -272,7 +223,6 @@
         <div v-if="mcpFormError" class="mcp-form-error">{{ mcpFormError }}</div>
       </section>
 
-      <!-- 技能 -->
       <section class="settings-section">
         <h3 class="section-title">技能</h3>
 
@@ -302,34 +252,8 @@
         <div v-if="skillError" class="mcp-form-error">{{ skillError }}</div>
       </section>
 
-      <!-- 权限管理 -->
-      <section class="settings-section">
-        <h3 class="section-title">权限管理</h3>
+      <PermissionSettingsSection :grants="grants" @revoke="revokeGrant" />
 
-        <div v-if="grants.length === 0" class="grants-empty">
-          暂无已授权的插件权限
-        </div>
-
-        <div
-          v-for="grant in grants"
-          :key="grant.pluginId + ':' + grant.capability + ':' + (grant.resource ?? '')"
-          class="setting-item"
-        >
-          <div class="setting-label">
-            <span class="label-text">
-              {{ grant.pluginId }}
-              <span class="grant-risk" :class="'grant-risk-' + grant.risk.toLowerCase()">{{ riskLabel(grant.risk) }}</span>
-            </span>
-            <span class="label-desc">{{ grant.description }} · {{ scopeLabel(grant.scope) }}</span>
-            <span v-if="grant.resource" class="label-desc grant-resource">{{ grant.resource }}</span>
-          </div>
-          <div class="setting-control">
-            <button class="danger-btn" @click="revokeGrant(grant)">撤销</button>
-          </div>
-        </div>
-      </section>
-
-      <!-- 关于与更新 -->
       <section class="settings-section">
         <h3 class="section-title">关于与更新</h3>
 
@@ -388,14 +312,15 @@ import { relaunch } from '@tauri-apps/plugin-process';
 import { useSearchStore } from '../stores/search';
 import { withNativeDialog } from '../composables/nativeDialog';
 import { hideOnBlur } from '../composables/appConfig';
-import type { LlmConfig, McpServerConfig, PermissionGrant, PermissionScope, RiskLevel, SkillMeta } from '../api/rubick';
+import type { LlmConfig, McpServerConfig, PermissionGrant, SkillMeta } from '../api/rubick';
+import AiSettingsSection from './settings/AiSettingsSection.vue';
+import PermissionSettingsSection from './settings/PermissionSettingsSection.vue';
 import logoUrl from '../assets/logo.png';
 
 const emit = defineEmits<{
   (e: 'back'): void;
 }>();
 
-// 设置数据
 const settings = ref({
   theme: 'system',
   opacity: 0.95,
@@ -406,39 +331,31 @@ const settings = ref({
   showDockIcon: true,
 });
 
-// 快捷键录制状态
 const recordingShortcut = ref(false);
 
-// 加载设置
 async function loadSettings() {
   try {
     const config = await invoke<any>('get_config');
-    if (config) {
-      settings.value = { ...settings.value, ...config };
-    }
+    if (config) settings.value = { ...settings.value, ...config };
   } catch (e) {
     console.error('Failed to load settings:', e);
   }
 }
 
-// 保存设置
 async function saveSettings() {
   try {
     await invoke('save_config', { newConfig: settings.value });
-    // 同步共享配置（App.vue 失焦隐藏逻辑实时生效，无需重启）
     hideOnBlur.value = settings.value.hideOnBlur;
   } catch (e) {
     console.error('Failed to save settings:', e);
   }
 }
 
-// 主题变化
 function onThemeChange() {
   applyTheme(settings.value.theme);
   saveSettings();
 }
 
-// Dock 图标显隐：走专用命令（持久化 + 立即生效，macOS 切换 ActivationPolicy）
 async function onDockIconChange() {
   try {
     await invoke('set_dock_icon_visible', { visible: settings.value.showDockIcon });
@@ -447,71 +364,52 @@ async function onDockIconChange() {
   }
 }
 
-// 应用主题
 function applyTheme(theme: string) {
   const root = document.documentElement;
-
   if (theme === 'dark') {
     root.classList.add('dark');
   } else if (theme === 'light') {
     root.classList.remove('dark');
   } else {
-    // 跟随系统
     const isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-    if (isDark) {
-      root.classList.add('dark');
-    } else {
-      root.classList.remove('dark');
-    }
+    if (isDark) root.classList.add('dark');
+    else root.classList.remove('dark');
   }
 }
 
-// 透明度变化
 function onOpacityChange() {
   document.documentElement.style.setProperty('--window-opacity', String(settings.value.opacity));
   saveSettings();
 }
 
-// 开机启动变化
 async function onAutoLaunchChange() {
   try {
-    // TODO: 调用 Tauri API 设置开机启动
     await saveSettings();
   } catch (e) {
     console.error('Failed to set auto launch:', e);
   }
 }
 
-// 开始录制快捷键
 function startRecordShortcut() {
   recordingShortcut.value = true;
   document.addEventListener('keydown', handleShortcutKeydown);
 }
 
-// 处理快捷键按下
 async function handleShortcutKeydown(e: KeyboardEvent) {
   if (!recordingShortcut.value) return;
-
   e.preventDefault();
   e.stopPropagation();
+  if (['Control', 'Alt', 'Shift', 'Meta'].includes(e.key)) return;
 
-  // 忽略单独的修饰键
-  if (['Control', 'Alt', 'Shift', 'Meta'].includes(e.key)) {
-    return;
-  }
-
-  // 构建快捷键字符串
   const parts: string[] = [];
   if (e.metaKey) parts.push('Cmd');
   if (e.ctrlKey) parts.push('Ctrl');
   if (e.altKey) parts.push('Alt');
   if (e.shiftKey) parts.push('Shift');
 
-  // 添加主键
   let key = e.key.toUpperCase();
   if (key === ' ') key = 'Space';
   if (key === 'ESCAPE') {
-    // ESC 取消录制
     recordingShortcut.value = false;
     document.removeEventListener('keydown', handleShortcutKeydown);
     return;
@@ -520,8 +418,6 @@ async function handleShortcutKeydown(e: KeyboardEvent) {
 
   const shortcut = parts.join('+');
   settings.value.shortcut = shortcut;
-
-  // 注册新快捷键
   try {
     await invoke('register_shortcut', { shortcut });
     await saveSettings();
@@ -533,7 +429,6 @@ async function handleShortcutKeydown(e: KeyboardEvent) {
   document.removeEventListener('keydown', handleShortcutKeydown);
 }
 
-// 清除搜索历史
 async function clearHistory() {
   try {
     await invoke('clear_search_history');
@@ -542,7 +437,6 @@ async function clearHistory() {
   }
 }
 
-// 刷新应用缓存
 async function refreshCache() {
   try {
     await invoke('refresh_app_cache');
@@ -551,13 +445,10 @@ async function refreshCache() {
   }
 }
 
-// ============ AI 设置 ============
-
 const llmConfig = ref<LlmConfig>({ baseUrl: '', model: '' });
 const apiKeyInput = ref('');
 const hasApiKey = ref(false);
 
-// 加载 LLM 配置与 API key 状态
 async function loadLlmConfig() {
   try {
     const config = await invoke<LlmConfig>('llm_get_config');
@@ -568,7 +459,6 @@ async function loadLlmConfig() {
   }
 }
 
-// 保存 Base URL / Model（失焦时触发）
 async function saveLlmConfig() {
   try {
     await invoke('llm_set_config', {
@@ -581,7 +471,6 @@ async function saveLlmConfig() {
   }
 }
 
-// 保存 API Key（只写不回显）
 async function saveApiKey() {
   const key = apiKeyInput.value.trim();
   if (!key) return;
@@ -596,15 +485,11 @@ async function saveApiKey() {
   }
 }
 
-// ============ MCP 服务器 ============
-
 const mcpServers = ref<Record<string, McpServerConfig>>({});
 const mcpForm = ref({ name: '', command: '', args: '', url: '' });
 const mcpFormError = ref('');
-
 const mcpServerNames = computed(() => Object.keys(mcpServers.value));
 
-// 加载 MCP 服务器列表
 async function loadMcpServers() {
   try {
     const config = await invoke<any>('get_config');
@@ -614,15 +499,11 @@ async function loadMcpServers() {
   }
 }
 
-// 摘要：HTTP 显示 URL，stdio 显示命令 + 参数
 function mcpSummary(server: McpServerConfig): string {
-  if (server.url?.trim()) {
-    return `HTTP · ${server.url}`;
-  }
+  if (server.url?.trim()) return `HTTP · ${server.url}`;
   return [server.command, ...(server.args ?? [])].join(' ');
 }
 
-// 重新读取完整 config，替换 mcpServers 后整体保存，其他字段原样保留
 async function saveMcpServers() {
   try {
     const config = await invoke<any>('get_config');
@@ -635,7 +516,6 @@ async function saveMcpServers() {
   }
 }
 
-// 添加 MCP 服务器
 function addMcpServer() {
   const name = mcpForm.value.name.trim();
   const command = mcpForm.value.command.trim();
@@ -668,7 +548,6 @@ function addMcpServer() {
   saveMcpServers();
 }
 
-// 切换启用状态
 function toggleMcpServer(name: string) {
   const server = mcpServers.value[name];
   if (!server) return;
@@ -679,7 +558,6 @@ function toggleMcpServer(name: string) {
   saveMcpServers();
 }
 
-// 删除 MCP 服务器
 function removeMcpServer(name: string) {
   const next = { ...mcpServers.value };
   delete next[name];
@@ -687,12 +565,9 @@ function removeMcpServer(name: string) {
   saveMcpServers();
 }
 
-// ============ 技能 ============
-
 const skills = ref<SkillMeta[]>([]);
 const skillError = ref('');
 
-// 加载已安装技能列表
 async function loadSkills() {
   try {
     skills.value = await invoke<SkillMeta[]>('skill_list');
@@ -701,11 +576,9 @@ async function loadSkills() {
   }
 }
 
-// 选择目录安装技能（目录需含合法 SKILL.md）
 async function addSkill() {
   skillError.value = '';
   try {
-    // 原生面板期间抑制失焦隐藏（withNativeDialog）
     const selected = await withNativeDialog(() => invoke<string | null>('fs_pick_folder'));
     if (!selected) return;
     await invoke('skill_install_from_dir', { sourceDir: selected });
@@ -715,7 +588,6 @@ async function addSkill() {
   }
 }
 
-// 按 name 删除技能
 async function removeSkill(name: string) {
   skillError.value = '';
   try {
@@ -726,7 +598,6 @@ async function removeSkill(name: string) {
   }
 }
 
-// 在系统文件管理器中打开技能目录（手动管理用）
 async function openSkillsDir() {
   skillError.value = '';
   try {
@@ -736,33 +607,8 @@ async function openSkillsDir() {
   }
 }
 
-// ============ 权限管理 ============
-
-// 已授权的插件权限
 const grants = ref<PermissionGrant[]>([]);
 
-const SCOPE_LABELS: Record<PermissionScope, string> = {
-  once: '仅一次',
-  session: '本次会话',
-  always: '始终允许',
-};
-
-const RISK_LABELS: Record<RiskLevel, string> = {
-  Low: '低风险',
-  Medium: '中风险',
-  High: '高风险',
-  Critical: '严重风险',
-};
-
-function scopeLabel(scope: PermissionScope): string {
-  return SCOPE_LABELS[scope] ?? scope;
-}
-
-function riskLabel(risk: RiskLevel): string {
-  return RISK_LABELS[risk] ?? risk;
-}
-
-// 加载授权列表
 async function loadGrants() {
   try {
     grants.value = await invoke<PermissionGrant[]>('permission_list_grants');
@@ -771,7 +617,6 @@ async function loadGrants() {
   }
 }
 
-// 精确撤销一条授权；resource 为空时仍兼容旧版无资源授权。
 async function revokeGrant(grant: PermissionGrant) {
   try {
     await invoke('permission_revoke', {
@@ -785,8 +630,6 @@ async function revokeGrant(grant: PermissionGrant) {
   }
 }
 
-// ============ 关于与更新 ============
-
 const appVersion = ref('');
 const checkingUpdate = ref(false);
 const updating = ref(false);
@@ -795,7 +638,6 @@ const updateProgress = ref('');
 const pendingUpdate = ref<Update | null>(null);
 const updateAvailable = ref(false);
 
-// 加载当前版本号
 async function loadAppVersion() {
   try {
     appVersion.value = await getVersion();
@@ -804,7 +646,6 @@ async function loadAppVersion() {
   }
 }
 
-// 手动检查更新
 async function checkUpdate() {
   checkingUpdate.value = true;
   updateStatus.value = '正在检查更新…';
@@ -825,7 +666,6 @@ async function checkUpdate() {
   }
 }
 
-// 下载并安装更新，完成后重启
 async function installUpdate() {
   const update = pendingUpdate.value;
   if (!update || updating.value) return;
@@ -853,7 +693,6 @@ async function installUpdate() {
   }
 }
 
-// 打开 AI 会话日志目录
 async function openSessionsDir() {
   try {
     await invoke('open_sessions_dir');
@@ -863,12 +702,9 @@ async function openSessionsDir() {
   }
 }
 
-// 监听系统主题变化
 const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
 function handleSystemThemeChange() {
-  if (settings.value.theme === 'system') {
-    applyTheme('system');
-  }
+  if (settings.value.theme === 'system') applyTheme('system');
 }
 
 onMounted(() => {
@@ -981,7 +817,6 @@ onUnmounted(() => {
   gap: 8px;
 }
 
-/* 下拉选择 */
 select {
   padding: 6px 12px;
   font-size: 14px;
@@ -997,7 +832,6 @@ select:focus {
   border-color: var(--accent-color);
 }
 
-/* 滑块 */
 input[type="range"] {
   width: 100px;
   height: 4px;
@@ -1022,7 +856,6 @@ input[type="range"]::-webkit-slider-thumb {
   min-width: 36px;
 }
 
-/* 开关 */
 .toggle {
   position: relative;
   display: inline-block;
@@ -1068,7 +901,6 @@ input[type="range"]::-webkit-slider-thumb {
   transform: translateX(20px);
 }
 
-/* 按钮 */
 .shortcut-btn {
   padding: 6px 12px;
   font-size: 13px;
@@ -1126,7 +958,6 @@ input[type="range"]::-webkit-slider-thumb {
   color: white;
 }
 
-/* 文本输入框（AI 设置） */
 .text-input {
   width: 200px;
   padding: 6px 12px;
@@ -1148,7 +979,6 @@ input[type="range"]::-webkit-slider-thumb {
   white-space: nowrap;
 }
 
-/* MCP 服务器 */
 .mcp-hint {
   padding: 4px 0 8px;
   font-size: 12px;
@@ -1178,7 +1008,6 @@ input[type="range"]::-webkit-slider-thumb {
   color: var(--danger-color);
 }
 
-/* 技能 */
 .skill-version {
   margin-left: 6px;
   font-size: 11px;
@@ -1186,7 +1015,6 @@ input[type="range"]::-webkit-slider-thumb {
   color: var(--text-tertiary);
 }
 
-/* 权限管理 */
 .grants-empty {
   padding: 12px 0;
   font-size: 13px;
@@ -1222,7 +1050,6 @@ input[type="range"]::-webkit-slider-thumb {
   color: #ff3b30;
 }
 
-/* 关于 */
 .about-info {
   display: flex;
   flex-direction: column;
