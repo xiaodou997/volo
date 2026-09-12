@@ -231,51 +231,17 @@
 
       <PermissionSettingsSection :grants="grants" @revoke="revokeGrant" />
 
-      <section class="settings-section">
-        <h3 class="section-title">关于与更新</h3>
-
-        <div class="about-info">
-          <img class="app-logo" :src="logoUrl" alt="Volo logo" />
-          <div class="app-name">Volo</div>
-          <div class="app-version">版本 {{ appVersion }}</div>
-          <div class="app-desc">桌面效率工具箱</div>
-        </div>
-
-        <div class="setting-item">
-          <div class="setting-label">
-            <span class="label-text">检查更新</span>
-            <span class="label-desc">{{ updateStatus }}</span>
-          </div>
-          <div class="setting-control">
-            <button
-              v-if="updateAvailable"
-              class="action-btn"
-              :disabled="updating"
-              @click="installUpdate"
-            >
-              {{ updating ? updateProgress : '立即更新' }}
-            </button>
-            <button
-              v-else
-              class="action-btn"
-              :disabled="checkingUpdate"
-              @click="checkUpdate"
-            >
-              {{ checkingUpdate ? '检查中…' : '检查更新' }}
-            </button>
-          </div>
-        </div>
-
-        <div class="setting-item">
-          <div class="setting-label">
-            <span class="label-text">会话日志</span>
-            <span class="label-desc">打开 AI 会话事件日志目录</span>
-          </div>
-          <div class="setting-control">
-            <button class="action-btn" @click="openSessionsDir">打开</button>
-          </div>
-        </div>
-      </section>
+      <AboutUpdateSection
+        :app-version="appVersion"
+        :update-status="updateStatus"
+        :update-available="updateAvailable"
+        :checking-update="checkingUpdate"
+        :updating="updating"
+        :update-progress="updateProgress"
+        @check-update="checkUpdate"
+        @install-update="installUpdate"
+        @open-sessions="openSessionsDir"
+      />
     </div>
   </div>
 </template>
@@ -290,10 +256,10 @@ import { useSearchStore } from '../stores/search';
 import { withNativeDialog } from '../composables/nativeDialog';
 import { hideOnBlur } from '../composables/appConfig';
 import type { LlmConfig, McpServerConfig, PermissionGrant, SkillMeta } from '../api/rubick';
+import AboutUpdateSection from './settings/AboutUpdateSection.vue';
 import AiSettingsSection from './settings/AiSettingsSection.vue';
 import PermissionSettingsSection from './settings/PermissionSettingsSection.vue';
 import SkillSettingsSection from './settings/SkillSettingsSection.vue';
-import logoUrl from '../assets/logo.png';
 
 const settings = ref({
   theme: 'system',
@@ -980,38 +946,5 @@ input[type="range"]::-webkit-slider-thumb {
   padding: 12px 0;
   font-size: 13px;
   color: var(--text-tertiary);
-}
-
-.about-info {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  padding: 24px 0;
-  text-align: center;
-}
-
-.app-logo {
-  width: 64px;
-  height: 64px;
-  border-radius: 16px;
-  margin-bottom: 12px;
-}
-
-.app-name {
-  font-size: 18px;
-  font-weight: 600;
-  color: var(--text-primary);
-}
-
-.app-version {
-  font-size: 13px;
-  color: var(--text-secondary);
-  margin-top: 4px;
-}
-
-.app-desc {
-  font-size: 13px;
-  color: var(--text-tertiary);
-  margin-top: 4px;
 }
 </style>
