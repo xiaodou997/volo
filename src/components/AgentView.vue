@@ -5,26 +5,16 @@
 
 <template>
   <div class="agent-view">
-    <!-- 顶部导航 -->
-    <div class="agent-header">
-      <button class="back-btn" @click="onBack">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M19 12H5M12 19l-7-7 7-7"/>
-        </svg>
-      </button>
-      <h2 class="title">{{ headerTitle }}</h2>
-      <span v-if="viewMode === 'chat' && !finished" class="running-dot"></span>
-      <div class="header-actions">
-        <button
-          v-if="viewMode === 'chat' && !finished"
-          class="header-btn stop-btn"
-          :disabled="stopping"
-          @click="stopSession"
-        >{{ stopping ? '停止中…' : '停止' }}</button>
-        <button v-if="viewMode === 'chat'" class="header-btn" @click="openHistory">历史</button>
-        <button class="header-btn" @click="newSession">新对话</button>
-      </div>
-    </div>
+    <AgentHeader
+      :title="headerTitle"
+      :chat-mode="viewMode === 'chat'"
+      :finished="finished"
+      :stopping="stopping"
+      @back="onBack"
+      @stop="stopSession"
+      @history="openHistory"
+      @new-session="newSession"
+    />
 
     <!-- 会话历史列表 -->
     <div v-if="viewMode === 'history'" class="agent-content">
@@ -122,38 +112,19 @@
       >{{ resuming ? '恢复中…' : '继续对话' }}</button>
     </div>
 
-    <!-- 追问输入栏（实时会话结束后才可用）；支持粘贴图片 / 文本文件作为附件 -->
-    <div v-if="viewMode === 'chat' && finished" class="follow-up-area">
-      <!-- 待发送附件 -->
-      <div v-if="pendingImages.length || pendingFiles.length" class="attachment-chips">
-        <span v-for="(img, i) in pendingImages" :key="'img' + i" class="chip">
-          <img :src="img" class="chip-thumb" alt="图片附件" />
-          <button class="chip-remove" @click="pendingImages.splice(i, 1)">×</button>
-        </span>
-        <span v-for="(f, i) in pendingFiles" :key="'file' + i" class="chip">
-          📎 {{ f.name }}
-          <button class="chip-remove" @click="pendingFiles.splice(i, 1)">×</button>
-        </span>
-      </div>
-      <div v-if="attachmentError" class="attachment-error">{{ attachmentError }}</div>
-      <div class="follow-up-bar">
-        <input
-          ref="followUpInputRef"
-          v-model="followUp"
-          type="text"
-          class="follow-up-input"
-          placeholder="继续追问…（可直接粘贴截图 / 文本文件）"
-          :disabled="!finished"
-          @keydown.enter="sendFollowUp"
-          @paste="onPaste"
-        />
-        <button
-          class="follow-up-send"
-          :disabled="!finished || (!followUp.trim() && !pendingImages.length && !pendingFiles.length)"
-          @click="sendFollowUp"
-        >发送</button>
-      </div>
-    </div>
+    <AgentFollowUp
+      v-if="viewMode === 'chat' && finished"
+      ref="followUpRef"
+      v-model="followUp"
+      :finished="finished"
+      :pending-images="pendingImages"
+      :pending-files="pendingFiles"
+      :attachment-error="attachmentError"
+      @paste="onPaste"
+      @send="sendFollowUp"
+      @remove-image="pendingImages.splice($event, 1)"
+      @remove-file="pendingFiles.splice($event, 1)"
+    />
   </div>
 </template>
 
@@ -164,6 +135,8 @@ import { invoke } from '@tauri-apps/api/core';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import type { AgentEvent, ReplayEvent, SessionMeta } from '../api/rubick';
+import AgentFollowUp from './agent/AgentFollowUp.vue';
+import AgentHeader from './agent/AgentHeader.vue';
 import {
   buildQueryWithTextAttachments,
   classifyAttachment,
@@ -417,7 +390,7 @@ async function copyMessage(key: string, text: string) {
 }
 
 // 引用追问：把回答原文以 Markdown 引用块填入追问输入框并聚焦
-const followUpInputRef = ref<HTMLInputElement | null>(null);
+const followUpRef = ref<InstanceType<typeof AgentFollowUp> | null>(null);
 
 function quoteMessage(text: string) {
   const quote =
@@ -426,7 +399,7 @@ function quoteMessage(text: string) {
       .map((line) => '> ' + line)
       .join('\n') + '\n\n';
   followUp.value = quote + followUp.value;
-  void nextTick(() => followUpInputRef.value?.focus());
+  void nextTick(() => followUpRef.value?.focus());
 }
 
 // 失败重试：记录最后一次提问参数（首轮带 skill，追问不带）
