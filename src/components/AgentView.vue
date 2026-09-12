@@ -164,6 +164,11 @@ import { invoke } from '@tauri-apps/api/core';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import type { AgentEvent, ReplayEvent, SessionMeta } from '../api/rubick';
+import {
+  reduceTimelineEvent,
+  replayEventsToTimeline,
+  type TimelineItem,
+} from '../agent/timeline';
 
 // LLM 输出按 Markdown 渲染；DOMPurify 消毒防注入（内容来自外部模型，不可信）
 marked.setOptions({ breaks: true });
@@ -184,20 +189,6 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'exit'): void;
 }>();
-
-interface TimelineItem {
-  kind: 'user' | 'message' | 'tool_call' | 'tool_result' | 'error';
-  text: string;
-  detail?: string;
-  // 工具结果的完整内容（text 是截断显示版，复制时取完整版）
-  fullText?: string;
-  // 流式输出进行中（末尾显示闪烁光标）
-  streaming?: boolean;
-  // user 项的附件：图片 data URL（实时会话）/ 文件名（文本附件）/ 图片数（回放徽标）
-  images?: string[];
-  files?: string[];
-  imageCount?: number;
-}
 
 // 视图模式：实时会话 / 历史列表 / 历史回放
 type ViewMode = 'chat' | 'history' | 'replay';
@@ -315,37 +306,12 @@ async function openHistory() {
   }
 }
 
-function replayToTimeline(event: ReplayEvent): TimelineItem | null {
-  switch (event.kind) {
-    case 'user':
-      return { kind: 'user', text: event.content ?? '', imageCount: event.imageCount };
-    case 'message':
-      return event.content ? { kind: 'message', text: event.content } : null;
-    case 'tool_call':
-      return {
-        kind: 'tool_call',
-        text: event.name ?? 'unknown',
-        detail: truncate(JSON.stringify(event.args ?? {}), 100),
-      };
-    case 'tool_result':
-      return {
-        kind: 'tool_result',
-        text: truncate(event.result ?? '', 200),
-        fullText: event.result ?? '',
-      };
-    case 'error':
-      return { kind: 'error', text: event.content ?? '未知错误' };
-  }
-}
-
 async function openSession(sessionId: string) {
   sessionsError.value = '';
   resumeError.value = '';
   try {
     const events = await invoke<ReplayEvent[]>('agent_read_session', { sessionId });
-    replayTimeline.value = events
-      .map(replayToTimeline)
-      .filter((item): item is TimelineItem => item !== null);
+    replayTimeline.value = replayEventsToTimeline(events);
     currentSessionId.value = sessionId;
     viewMode.value = 'replay';
     void enhanceCodeBlocks();
@@ -435,10 +401,6 @@ async function sendFollowUp() {
     finished.value = true;
     timeline.value.push({ kind: 'error', text: String(e) });
   }
-}
-
-function truncate(s: string, max: number): string {
-  return s.length > max ? s.slice(0, max) + '…' : s;
 }
 
 async function scrollToBottom() {
@@ -534,52 +496,13 @@ async function enhanceCodeBlocks() {
 
 async function handleEvent(event: AgentEvent) {
   loading.value = false;
-  // 流式增量片段：追加到当前正在流式输出的气泡（没有则新建一个）
-  if (event.kind === 'message' && event.delta) {
-    const last = timeline.value[timeline.value.length - 1];
-    if (last && last.kind === 'message' && last.streaming) {
-      last.text += event.content ?? '';
-    } else {
-      timeline.value.push({ kind: 'message', text: event.content ?? '', streaming: true });
-    }
-    await scrollToBottom();
-    void enhanceCodeBlocks();
-    return;
+  const transition = reduceTimelineEvent(timeline.value, event);
+  timeline.value = transition.timeline;
+  if (transition.finished !== undefined) {
+    finished.value = transition.finished;
   }
-  // 任何非增量事件到来，说明上一段流式输出已结束
-  const last = timeline.value[timeline.value.length - 1];
-  if (last?.streaming) {
-    last.streaming = false;
-  }
-  switch (event.kind) {
-    case 'message':
-      if (event.content) {
-        timeline.value.push({ kind: 'message', text: event.content });
-      }
-      break;
-    case 'tool_call':
-      timeline.value.push({
-        kind: 'tool_call',
-        text: event.name ?? 'unknown',
-        detail: truncate(JSON.stringify(event.args ?? {}), 100),
-      });
-      break;
-    case 'tool_result':
-      timeline.value.push({
-        kind: 'tool_result',
-        text: truncate(event.result ?? '', 200),
-        fullText: event.result ?? '',
-      });
-      break;
-    case 'error':
-      timeline.value.push({ kind: 'error', text: event.content ?? '未知错误' });
-      finished.value = true;
-      stopping.value = false;
-      break;
-    case 'done':
-      finished.value = true;
-      stopping.value = false;
-      break;
+  if (transition.stopping !== undefined) {
+    stopping.value = transition.stopping;
   }
   await scrollToBottom();
   void enhanceCodeBlocks();
