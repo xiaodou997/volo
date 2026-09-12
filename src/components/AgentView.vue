@@ -165,6 +165,11 @@ import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import type { AgentEvent, ReplayEvent, SessionMeta } from '../api/rubick';
 import {
+  buildQueryWithTextAttachments,
+  classifyAttachment,
+  type TextAttachment,
+} from '../agent/attachments';
+import {
   reduceTimelineEvent,
   replayEventsToTimeline,
   type TimelineItem,
@@ -207,13 +212,8 @@ const sessionsError = ref('');
 const followUp = ref('');
 // 待发送附件（粘贴进输入框的图片 / 文本文件）
 const pendingImages = ref<string[]>([]);
-const pendingFiles = ref<{ name: string; text: string }[]>([]);
+const pendingFiles = ref<TextAttachment[]>([]);
 const attachmentError = ref('');
-
-const MAX_IMAGE_SIZE = 10 * 1024 * 1024; // 图片上限 10MB
-const MAX_TEXT_SIZE = 256 * 1024; // 文本附件上限 256KB
-const TEXT_FILE_EXT =
-  /\.(txt|md|markdown|log|json|csv|yaml|yml|xml|html?|js|ts|jsx|tsx|py|rs|sh|c|h|cpp|java|go|css|sql|toml|ini)$/i;
 
 function readAsDataURL(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -235,21 +235,16 @@ async function onPaste(e: ClipboardEvent) {
   e.preventDefault();
 
   for (const file of files) {
-    if (file.type.startsWith('image/')) {
-      if (file.size > MAX_IMAGE_SIZE) {
-        attachmentError.value = `图片超过 ${Math.round(MAX_IMAGE_SIZE / 1024 / 1024)}MB，未添加`;
-        continue;
-      }
-      pendingImages.value.push(await readAsDataURL(file));
-    } else if (file.type.startsWith('text/') || TEXT_FILE_EXT.test(file.name)) {
-      if (file.size > MAX_TEXT_SIZE) {
-        attachmentError.value = `文本文件超过 ${Math.round(MAX_TEXT_SIZE / 1024)}KB，未添加`;
-        continue;
-      }
-      pendingFiles.value.push({ name: file.name || '未命名.txt', text: await file.text() });
-    } else {
-      attachmentError.value = `不支持的文件类型：${file.name || file.type || '未知'}（支持图片和文本类文件）`;
+    const decision = classifyAttachment(file);
+    if (decision.kind === 'reject') {
+      attachmentError.value = decision.message;
+      continue;
     }
+    if (decision.kind === 'image') {
+      pendingImages.value.push(await readAsDataURL(file));
+      continue;
+    }
+    pendingFiles.value.push({ name: file.name || '未命名.txt', text: await file.text() });
   }
 }
 // 停止按钮状态（等待后端 done 事件落地）
@@ -372,12 +367,8 @@ async function sendFollowUp() {
   const files = [...pendingFiles.value];
   if ((!q && !images.length && !files.length) || !finished.value) return;
 
-  // 文本文件内容并入消息正文（带文件名标注），LLM 直接可读；
-  // 图片走多模态 parts 单独传
-  let fullQuery = q;
-  for (const f of files) {
-    fullQuery += `\n\n[附件 ${f.name}]\n\`\`\`\n${f.text}\n\`\`\``;
-  }
+  // 文本文件内容并入消息正文（带文件名标注），LLM 直接可读；图片走多模态 parts 单独传
+  const fullQuery = buildQueryWithTextAttachments(q, files);
 
   followUp.value = '';
   pendingImages.value = [];
