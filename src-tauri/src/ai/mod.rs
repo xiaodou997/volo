@@ -1,7 +1,7 @@
 //! AI 模块
 //! LLM 接入（OpenAI 兼容协议）+ 内置工具注册表 + Agent 会话原型
 //!
-//! 依赖方向：Agent / Workflow → ChatBackend / ToolRegistry → PermissionEngine → Capability
+//! 依赖方向：Agent / Workflow → ChatBackend / ToolExecutor / ToolRegistry → PermissionEngine → Capability
 
 pub mod agent;
 pub mod llm;
@@ -9,5 +9,6 @@ pub mod mcp;
 pub mod plugin_tools;
 pub mod session;
 pub mod skill;
+pub mod tool_executor;
 pub mod tools;
 pub mod workflow;

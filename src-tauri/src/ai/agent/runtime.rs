@@ -1,17 +1,15 @@
-//! Agent 纯运行时：事件协议、工具执行抽象与 tool-calling loop。
+//! Agent 纯运行时：事件协议与 tool-calling loop。
 //!
 //! 本模块刻意不依赖 Tauri State / 会话持久化，让运行循环可以独立测试。
 
-use std::future::Future;
-use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde::Serialize;
 use serde_json::{json, Value};
 
 use crate::ai::llm::{ChatBackend, Message};
+use crate::ai::tool_executor::ToolExecutor;
 use crate::ai::tools::ToolSpec;
-use crate::error::Result;
 
 /// 最大对话轮数，防止失控循环。
 pub const MAX_ROUNDS: usize = 8;
@@ -81,15 +79,6 @@ impl AgentEvent {
             ..Self::simple(AgentEventKind::Error)
         }
     }
-}
-
-/// 工具执行器抽象：让会话循环不依赖 Tauri AppHandle。
-pub trait ToolExecutor: Send + Sync {
-    fn execute<'a>(
-        &'a self,
-        name: &'a str,
-        args: Value,
-    ) -> Pin<Box<dyn Future<Output = Result<Value>> + Send + 'a>>;
 }
 
 /// Agent 会话循环。
