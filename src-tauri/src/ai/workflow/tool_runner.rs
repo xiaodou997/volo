@@ -142,7 +142,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tool_step_delegates_name_and_args() {
+    async fn tool_step_resolves_typed_input_before_execution() {
         let executor = MockToolExecutor::new();
         let runner = WorkflowToolRunner::new(&executor);
         let workflow = Workflow {
@@ -151,12 +151,16 @@ mod tests {
             steps: vec![WorkflowStep::Tool {
                 id: "read".to_string(),
                 name: "fs_read".to_string(),
-                args: json!({ "path": "/tmp/demo.txt" }),
+                args: json!({ "payload": "${input}" }),
             }],
         };
-        let execution = execute_workflow(&workflow, Value::Null, &runner).await.unwrap();
+        let input = json!({ "count": 2, "enabled": true });
+        let execution = execute_workflow(&workflow, input.clone(), &runner).await.unwrap();
         assert_eq!(execution.status, WorkflowExecutionStatus::Completed);
-        assert_eq!(executor.calls.lock().unwrap().len(), 1);
+        let calls = executor.calls.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, "fs_read");
+        assert_eq!(calls[0].1, json!({ "payload": input }));
     }
 
     #[tokio::test]
