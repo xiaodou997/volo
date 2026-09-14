@@ -9,6 +9,10 @@ use crate::error::{Result, VoloError};
 
 use super::{WorkflowContext, WorkflowStep, WorkflowStepRunner};
 
+#[path = "bindings.rs"]
+mod bindings;
+use bindings::resolve_workflow_value;
+
 const WORKFLOW_AI_SYSTEM_PROMPT: &str = "你正在执行 Volo Workflow 的一个 AI step。只完成当前 step 指令，并使用提供的 Workflow 上下文。";
 
 /// Workflow step 适配器。
@@ -66,7 +70,10 @@ impl WorkflowStepRunner for WorkflowToolRunner<'_> {
     ) -> Pin<Box<dyn Future<Output = Result<Value>> + Send + 'a>> {
         Box::pin(async move {
             match step {
-                WorkflowStep::Tool { name, args, .. } => self.executor.execute(name, args.clone()).await,
+                WorkflowStep::Tool { name, args, .. } => {
+                    let args = resolve_workflow_value(args, context)?;
+                    self.executor.execute(name, args).await
+                }
                 WorkflowStep::Ai { prompt, .. } => self.run_ai(prompt, context).await,
             }
         })
