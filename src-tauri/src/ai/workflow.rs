@@ -6,7 +6,7 @@
 //! - 不包含 trigger / scheduler / retry / background daemon / DAG
 //! - 具体 Tool / AI 执行通过 `WorkflowStepRunner` 注入，核心不依赖 ToolRegistry 或 LLM
 
-mod commands;
+pub(crate) mod commands;
 mod tool_runner;
 pub use commands::workflow_run;
 pub use tool_runner::WorkflowToolRunner;
