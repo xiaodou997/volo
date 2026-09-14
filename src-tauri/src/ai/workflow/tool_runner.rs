@@ -9,6 +9,10 @@ use crate::error::{Result, VoloError};
 
 use super::{WorkflowContext, WorkflowStep, WorkflowStepRunner};
 
+#[path = "bindings.rs"]
+mod bindings;
+use bindings::resolve_workflow_value;
+
 const WORKFLOW_AI_SYSTEM_PROMPT: &str = "你正在执行 Volo Workflow 的一个 AI step。只完成当前 step 指令，并使用提供的 Workflow 上下文。";
 
 /// Workflow step 适配器。
@@ -66,7 +70,10 @@ impl WorkflowStepRunner for WorkflowToolRunner<'_> {
     ) -> Pin<Box<dyn Future<Output = Result<Value>> + Send + 'a>> {
         Box::pin(async move {
             match step {
-                WorkflowStep::Tool { name, args, .. } => self.executor.execute(name, args.clone()).await,
+                WorkflowStep::Tool { name, args, .. } => {
+                    let args = resolve_workflow_value(args, context)?;
+                    self.executor.execute(name, args).await
+                }
                 WorkflowStep::Ai { prompt, .. } => self.run_ai(prompt, context).await,
             }
         })
@@ -135,7 +142,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tool_step_delegates_name_and_args() {
+    async fn tool_step_resolves_typed_input_before_execution() {
         let executor = MockToolExecutor::new();
         let runner = WorkflowToolRunner::new(&executor);
         let workflow = Workflow {
@@ -144,12 +151,16 @@ mod tests {
             steps: vec![WorkflowStep::Tool {
                 id: "read".to_string(),
                 name: "fs_read".to_string(),
-                args: json!({ "path": "/tmp/demo.txt" }),
+                args: json!({ "payload": "${input}" }),
             }],
         };
-        let execution = execute_workflow(&workflow, Value::Null, &runner).await.unwrap();
+        let input = json!({ "count": 2, "enabled": true });
+        let execution = execute_workflow(&workflow, input.clone(), &runner).await.unwrap();
         assert_eq!(execution.status, WorkflowExecutionStatus::Completed);
-        assert_eq!(executor.calls.lock().unwrap().len(), 1);
+        let calls = executor.calls.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, "fs_read");
+        assert_eq!(calls[0].1, json!({ "payload": input }));
     }
 
     #[tokio::test]
