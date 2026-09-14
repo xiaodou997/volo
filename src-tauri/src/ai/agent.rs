@@ -12,7 +12,7 @@ use super::llm::{Message, OpenAiBackend};
 use super::mcp::McpRegistry;
 use super::plugin_tools::{collect_specs, AgentToolExecutor, PluginToolState};
 use super::session::{cleanup_old_sessions, sessions_dir, SessionLog, SESSION_RETENTION_DAYS};
-use super::tools::ToolRegistry;
+use super::tools::{ToolRegistry, AGENT_PRINCIPAL};
 use crate::core::config::Config;
 use crate::core::permission::PermissionEngine;
 use crate::error::{Result, VoloError};
@@ -225,6 +225,7 @@ pub fn agent_ask(
             plugins: &plugins,
             tool_state: &tool_state,
             mcp: &mcp,
+            principal: AGENT_PRINCIPAL,
         };
         let emit = |event: AgentEvent| {
             let _ = app_handle.emit("agent-event", &event);
