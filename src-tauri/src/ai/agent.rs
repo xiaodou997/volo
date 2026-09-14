@@ -19,7 +19,8 @@ use crate::error::{Result, VoloError};
 use crate::plugin::manager::PluginState;
 
 mod runtime;
-pub use runtime::{run_agent_loop, AgentEvent, AgentEventKind, ToolExecutor, MAX_ROUNDS};
+pub use super::tool_executor::ToolExecutor;
+pub use runtime::{run_agent_loop, AgentEvent, AgentEventKind, MAX_ROUNDS};
 
 #[cfg(test)]
 mod tests;
