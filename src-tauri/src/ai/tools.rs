@@ -152,13 +152,24 @@ impl ToolRegistry {
         }
     }
 
-    /// 执行工具：先经权限引擎裁决（Medium 风险会弹审批），再执行底层逻辑
-    ///
-    /// `enforce` 本身不做声明检查（声明检查在插件面 guard `require()` 中），
-    /// agent 作为内置 principal 直接进入授权查询/运行时审批流程。
+    /// 以 Agent 默认身份执行工具；保留现有调用语义。
     pub async fn execute(
         app: &AppHandle,
         engine: &PermissionEngine,
+        name: &str,
+        args: &Value,
+    ) -> Result<Value> {
+        Self::execute_as(app, engine, AGENT_PRINCIPAL, name, args).await
+    }
+
+    /// 以指定 principal 执行工具。
+    ///
+    /// Agent 使用 `agent:builtin`，Workflow 使用 `workflow:<id>`，从而让 Session/Always
+    /// 授权彼此隔离；实际 capability、resource 与底层执行逻辑保持完全一致。
+    pub async fn execute_as(
+        app: &AppHandle,
+        engine: &PermissionEngine,
+        principal: &str,
         name: &str,
         args: &Value,
     ) -> Result<Value> {
@@ -180,9 +191,7 @@ impl ToolRegistry {
         };
         let resource = resource_owned.as_deref();
 
-        engine
-            .enforce(app, AGENT_PRINCIPAL, capability, resource)
-            .await?;
+        engine.enforce(app, principal, capability, resource).await?;
 
         match name {
             "clipboard_read" => {

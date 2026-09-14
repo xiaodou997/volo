@@ -27,7 +27,7 @@ use crate::plugin::manager::PluginState;
 
 use super::agent::ToolExecutor;
 use super::mcp::{McpRegistry, MCP_NAME_PREFIX};
-use super::tools::{ToolRegistry, ToolSpec, AGENT_PRINCIPAL};
+use super::tools::{ToolRegistry, ToolSpec};
 
 /// 前端执行插件工具的超时时间
 pub const PLUGIN_TOOL_TIMEOUT: Duration = Duration::from_secs(30);
@@ -215,12 +215,16 @@ fn lookup_tool(plugins: &PluginState, llm_name: &str) -> Option<(String, String)
 
 /// 聚合执行器，dispatch 顺序：
 /// `mcp__` → MCP；`plugin__` → 插件工具桥；其余 → 内置 ToolRegistry。
+///
+/// `principal` 由调用者提供：Agent 使用 `agent:builtin`，Workflow 使用
+/// `workflow:<workflow-id>`，从而隔离 PermissionEngine 的 Session/Always grants。
 pub struct AgentToolExecutor<'a> {
     pub app: &'a AppHandle,
     pub engine: &'a PermissionEngine,
     pub plugins: &'a PluginState,
     pub tool_state: &'a PluginToolState,
     pub mcp: &'a McpRegistry,
+    pub principal: &'a str,
 }
 
 impl ToolExecutor for AgentToolExecutor<'_> {
@@ -235,7 +239,7 @@ impl ToolExecutor for AgentToolExecutor<'_> {
                 // 这样 Session/Always 授权只覆盖当前 MCP tool，而不是一次放行所有 MCP。
                 let capability = format!("mcp.call:{}", name);
                 self.engine
-                    .enforce(self.app, AGENT_PRINCIPAL, &capability, Some(name))
+                    .enforce(self.app, self.principal, &capability, Some(name))
                     .await?;
                 return self.mcp.call(name, args).await;
             }
@@ -244,7 +248,7 @@ impl ToolExecutor for AgentToolExecutor<'_> {
                 return self.execute_plugin_tool(name, args).await;
             }
 
-            ToolRegistry::execute(self.app, self.engine, name, &args).await
+            ToolRegistry::execute_as(self.app, self.engine, self.principal, name, &args).await
         })
     }
 }
