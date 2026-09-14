@@ -22,17 +22,11 @@ pub struct WorkflowToolRunner<'a> {
 
 impl<'a> WorkflowToolRunner<'a> {
     pub fn new(executor: &'a dyn ToolExecutor) -> Self {
-        Self {
-            executor,
-            backend: None,
-        }
+        Self { executor, backend: None }
     }
 
     pub fn with_backend(executor: &'a dyn ToolExecutor, backend: &'a dyn ChatBackend) -> Self {
-        Self {
-            executor,
-            backend: Some(backend),
-        }
+        Self { executor, backend: Some(backend) }
     }
 
     fn ai_prompt(prompt: &str, context: &WorkflowContext) -> Result<String> {
@@ -41,10 +35,7 @@ impl<'a> WorkflowToolRunner<'a> {
             "previousOutput": context.previous_output(),
             "outputs": context.outputs(),
         }))?;
-        Ok(format!(
-            "当前 step 指令：\n{}\n\nWorkflow 上下文：\n{}",
-            prompt, context
-        ))
+        Ok(format!("当前 step 指令：\n{}\n\nWorkflow 上下文：\n{}", prompt, context))
     }
 
     async fn run_ai(&self, prompt: &str, context: &WorkflowContext) -> Result<Value> {
@@ -57,9 +48,7 @@ impl<'a> WorkflowToolRunner<'a> {
         ];
         let response = backend.chat(&messages, &[]).await?;
         if !response.tool_calls.is_empty() {
-            return Err(VoloError::Other(
-                "workflow AI step 不接受 tool call 响应".to_string(),
-            ));
+            return Err(VoloError::Other("workflow AI step 不接受 tool call 响应".to_string()));
         }
         let content = response
             .content
@@ -77,9 +66,7 @@ impl WorkflowStepRunner for WorkflowToolRunner<'_> {
     ) -> Pin<Box<dyn Future<Output = Result<Value>> + Send + 'a>> {
         Box::pin(async move {
             match step {
-                WorkflowStep::Tool { name, args, .. } => {
-                    self.executor.execute(name, args.clone()).await
-                }
+                WorkflowStep::Tool { name, args, .. } => self.executor.execute(name, args.clone()).await,
                 WorkflowStep::Ai { prompt, .. } => self.run_ai(prompt, context).await,
             }
         })
@@ -89,22 +76,16 @@ impl WorkflowStepRunner for WorkflowToolRunner<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ai::llm::ChatResponse;
+    use crate::ai::llm::{ChatResponse, ToolCall};
     use crate::ai::tools::ToolSpec;
     use crate::ai::workflow::{execute_workflow, Workflow, WorkflowExecutionStatus};
     use serde_json::json;
     use std::sync::Mutex;
 
-    struct MockToolExecutor {
-        calls: Mutex<Vec<(String, Value)>>,
-    }
+    struct MockToolExecutor { calls: Mutex<Vec<(String, Value)>> }
 
     impl MockToolExecutor {
-        fn new() -> Self {
-            Self {
-                calls: Mutex::new(Vec::new()),
-            }
-        }
+        fn new() -> Self { Self { calls: Mutex::new(Vec::new()) } }
     }
 
     impl ToolExecutor for MockToolExecutor {
@@ -114,10 +95,7 @@ mod tests {
             args: Value,
         ) -> Pin<Box<dyn Future<Output = Result<Value>> + Send + 'a>> {
             Box::pin(async move {
-                self.calls
-                    .lock()
-                    .unwrap()
-                    .push((name.to_string(), args.clone()));
+                self.calls.lock().unwrap().push((name.to_string(), args.clone()));
                 Ok(json!({ "tool": name, "args": args }))
             })
         }
@@ -125,14 +103,12 @@ mod tests {
 
     struct MockChatBackend {
         calls: Mutex<Vec<(Vec<String>, usize)>>,
+        return_tool_call: bool,
     }
 
     impl MockChatBackend {
-        fn new() -> Self {
-            Self {
-                calls: Mutex::new(Vec::new()),
-            }
-        }
+        fn new() -> Self { Self { calls: Mutex::new(Vec::new()), return_tool_call: false } }
+        fn with_tool_call() -> Self { Self { calls: Mutex::new(Vec::new()), return_tool_call: true } }
     }
 
     impl ChatBackend for MockChatBackend {
@@ -143,15 +119,16 @@ mod tests {
         ) -> Pin<Box<dyn Future<Output = Result<ChatResponse>> + Send + 'a>> {
             Box::pin(async move {
                 self.calls.lock().unwrap().push((
-                    messages
-                        .iter()
-                        .map(|message| message.content.clone().unwrap_or_default())
-                        .collect(),
+                    messages.iter().map(|m| m.content.clone().unwrap_or_default()).collect(),
                     tools.len(),
                 ));
                 Ok(ChatResponse {
                     content: Some("这是摘要".to_string()),
-                    tool_calls: vec![],
+                    tool_calls: if self.return_tool_call {
+                        vec![ToolCall { id: "call-1".into(), name: "clipboard_read".into(), arguments: json!({}) }]
+                    } else {
+                        vec![]
+                    },
                 })
             })
         }
@@ -170,9 +147,7 @@ mod tests {
                 args: json!({ "path": "/tmp/demo.txt" }),
             }],
         };
-        let execution = execute_workflow(&workflow, Value::Null, &runner)
-            .await
-            .unwrap();
+        let execution = execute_workflow(&workflow, Value::Null, &runner).await.unwrap();
         assert_eq!(execution.status, WorkflowExecutionStatus::Completed);
         assert_eq!(executor.calls.lock().unwrap().len(), 1);
     }
@@ -197,9 +172,7 @@ mod tests {
                 },
             ],
         };
-        let execution = execute_workflow(&workflow, json!({ "source": "manual" }), &runner)
-            .await
-            .unwrap();
+        let execution = execute_workflow(&workflow, json!({ "source": "manual" }), &runner).await.unwrap();
         assert_eq!(execution.status, WorkflowExecutionStatus::Completed);
         assert_eq!(execution.output, Some(Value::String("这是摘要".to_string())));
         let calls = backend.calls.lock().unwrap();
@@ -208,5 +181,20 @@ mod tests {
         assert!(calls[0].0[1].contains("总结上一步结果"));
         assert!(calls[0].0[1].contains("\"source\": \"manual\""));
         assert!(calls[0].0[1].contains("\"read\""));
+    }
+
+    #[tokio::test]
+    async fn ai_step_rejects_tool_call_response() {
+        let executor = MockToolExecutor::new();
+        let backend = MockChatBackend::with_tool_call();
+        let runner = WorkflowToolRunner::with_backend(&executor, &backend);
+        let workflow = Workflow {
+            id: "ai-demo".into(),
+            name: "AI Demo".into(),
+            steps: vec![WorkflowStep::Ai { id: "summary".into(), prompt: "总结".into() }],
+        };
+        let execution = execute_workflow(&workflow, Value::Null, &runner).await.unwrap();
+        assert_eq!(execution.status, WorkflowExecutionStatus::Failed);
+        assert!(execution.error.as_deref().unwrap().contains("不接受 tool call 响应"));
     }
 }
