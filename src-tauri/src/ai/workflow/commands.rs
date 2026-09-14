@@ -1,14 +1,18 @@
 use serde_json::Value;
 use tauri::{AppHandle, Manager};
 
+use crate::ai::llm::OpenAiBackend;
 use crate::ai::mcp::McpRegistry;
 use crate::ai::plugin_tools::{AgentToolExecutor, PluginToolState};
 use crate::core::config::Config;
 use crate::core::permission::PermissionEngine;
-use crate::error::Result;
+use crate::error::{Result, VoloError};
 use crate::plugin::manager::PluginState;
 
-use super::{execute_workflow, validate_workflow, Workflow, WorkflowExecution, WorkflowToolRunner};
+use super::{
+    execute_workflow, validate_workflow, Workflow, WorkflowExecution, WorkflowStep,
+    WorkflowToolRunner,
+};
 
 /// Workflow 在 PermissionEngine 中使用独立 principal，避免复用 Agent 的持久授权。
 pub(crate) fn workflow_principal(workflow_id: &str) -> String {
@@ -17,7 +21,7 @@ pub(crate) fn workflow_principal(workflow_id: &str) -> String {
 
 /// 前台手动执行一个 Workflow。
 ///
-/// v1.11 当前只支持 Tool step；AI step 会由 `WorkflowToolRunner` 明确返回失败。
+/// v1.11 支持 Tool 与单轮 AI step；AI step 不开启内部 tool loop。
 /// 不包含持久化、后台执行、trigger、scheduler 或 retry。
 #[tauri::command]
 pub async fn workflow_run(
@@ -28,8 +32,30 @@ pub async fn workflow_run(
     // 先验证，避免无效定义触发 MCP 连接或权限流程。
     validate_workflow(&workflow)?;
 
+    let has_ai_step = workflow
+        .steps
+        .iter()
+        .any(|step| matches!(step, WorkflowStep::Ai { .. }));
+    let app_config = app.state::<Config>().get();
+    let mcp_servers = app_config.mcp_servers;
+    let llm = app_config.llm;
+    let llm_backend = if has_ai_step {
+        if llm.model.trim().is_empty() {
+            return Err(VoloError::Other(
+                "Workflow 包含 AI step，请先配置 LLM 模型".to_string(),
+            ));
+        }
+        if llm.api_key.trim().is_empty() {
+            return Err(VoloError::Other(
+                "Workflow 包含 AI step，请先配置 LLM API Key".to_string(),
+            ));
+        }
+        Some(OpenAiBackend::new(llm.base_url, llm.model, llm.api_key))
+    } else {
+        None
+    };
+
     let principal = workflow_principal(&workflow.id);
-    let mcp_servers = app.state::<Config>().get().mcp_servers;
     let mcp = app.state::<McpRegistry>();
 
     // 与 Agent 相同：MCP 连接按配置幂等建立，单 server 失败由 Registry warn + skip。
@@ -47,7 +73,10 @@ pub async fn workflow_run(
         mcp: &mcp,
         principal: &principal,
     };
-    let runner = WorkflowToolRunner::new(&executor);
+    let runner = match llm_backend.as_ref() {
+        Some(backend) => WorkflowToolRunner::with_backend(&executor, backend),
+        None => WorkflowToolRunner::new(&executor),
+    };
 
     execute_workflow(&workflow, input.unwrap_or(Value::Null), &runner).await
 }
