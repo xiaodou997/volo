@@ -69,6 +69,8 @@ pub fn run() {
             ai::session::open_sessions_dir,
             ai::session::agent_list_sessions,
             ai::session::agent_read_session,
+            // Workflow
+            ai::workflow::workflow_run,
             // Skill
             ai::skill::skill_list,
             ai::skill::skill_install_from_dir,
