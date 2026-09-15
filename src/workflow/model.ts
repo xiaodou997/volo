@@ -92,9 +92,18 @@ export function parseWorkflowInput(text: string): JsonValue {
   }
 }
 
-export function formatWorkflowValue(value: JsonValue | undefined, maxChars = 1200): string {
+// 展示层不需要递归展开 JsonValue 的静态类型。使用 unknown 可以避免 vue-tsc
+// 在模板表达式中对递归 JSON 类型进行无限深推导，同时保持运行时格式化行为不变。
+export function formatWorkflowValue(value: unknown, maxChars = 1200): string {
   if (value === undefined) return '';
-  const rendered = typeof value === 'string' ? value : JSON.stringify(value, null, 2);
+
+  let rendered: string;
+  if (typeof value === 'string') {
+    rendered = value;
+  } else {
+    rendered = JSON.stringify(value, null, 2) ?? String(value);
+  }
+
   if (rendered.length <= maxChars) return rendered;
   return `${rendered.slice(0, maxChars)}…`;
 }
