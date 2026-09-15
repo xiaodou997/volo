@@ -14,15 +14,36 @@ use super::{
     WorkflowToolRunner,
 };
 
+#[path = "storage.rs"]
+mod storage;
+
 /// Workflow 在 PermissionEngine 中使用独立 principal，避免复用 Agent 的持久授权。
 pub(crate) fn workflow_principal(workflow_id: &str) -> String {
     format!("workflow:{}", workflow_id)
 }
 
+/// 列出已持久化的 Workflow 定义。
+#[tauri::command]
+pub fn workflow_list(app: AppHandle) -> Result<Vec<Workflow>> {
+    storage::list_workflows(&storage::workflows_dir(&app)?)
+}
+
+/// 保存或覆盖一个 Workflow 定义。
+#[tauri::command]
+pub fn workflow_save(app: AppHandle, workflow: Workflow) -> Result<()> {
+    storage::save_workflow(&storage::workflows_dir(&app)?, &workflow)
+}
+
+/// 删除一个已持久化的 Workflow 定义。
+#[tauri::command]
+pub fn workflow_delete(app: AppHandle, workflow_id: String) -> Result<()> {
+    storage::delete_workflow(&storage::workflows_dir(&app)?, &workflow_id)
+}
+
 /// 前台手动执行一个 Workflow。
 ///
 /// v1.11 支持 Tool 与单轮 AI step；AI step 不开启内部 tool loop。
-/// 不包含持久化、后台执行、trigger、scheduler 或 retry。
+/// 不包含后台执行、trigger、scheduler 或 retry。
 #[tauri::command]
 pub async fn workflow_run(
     app: AppHandle,
