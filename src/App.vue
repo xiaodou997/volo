@@ -13,6 +13,7 @@ import ResultList from './components/ResultList.vue';
 import PluginView from './components/PluginView.vue';
 import SubInput from './components/SubInput.vue';
 import SettingsView from './components/SettingsView.vue';
+import WorkflowView from './components/WorkflowView.vue';
 import AgentView from './components/AgentView.vue';
 import PluginManager from './components/PluginManager.vue';
 import ApprovalDialog from './components/ApprovalDialog.vue';
@@ -30,6 +31,7 @@ const searchStore = useSearchStore();
 // 插件状态
 const pluginMode = ref(false);
 const settingsMode = ref(false);
+const workflowMode = ref(false);
 const pluginManagerMode = ref(false);
 const agentMode = ref(false);
 const agentQuery = ref('');
@@ -60,6 +62,10 @@ const windowHeight = computed(() => {
 
   if (settingsMode.value) {
     return 450; // 设置模式固定高度
+  }
+
+  if (workflowMode.value) {
+    return 520; // Workflow 编辑器 + execution timeline
   }
 
   if (agentMode.value) {
@@ -108,6 +114,12 @@ function handleInput(value: string) {
     return;
   }
 
+  // Workflow MVP 入口
+  if (value.toLowerCase() === 'workflow' || value === '工作流') {
+    enterWorkflow();
+    return;
+  }
+
   // 检查是否是插件管理命令
   if (value.toLowerCase() === 'plugins' || value === '插件') {
     enterPluginManager();
@@ -134,6 +146,9 @@ function handleClear() {
   } else if (settingsMode.value) {
     // 退出设置模式
     exitSettings();
+  } else if (workflowMode.value) {
+    // 退出 Workflow 模式
+    exitWorkflow();
   } else if (pluginManagerMode.value) {
     // 退出插件管理模式
     exitPluginManager();
@@ -348,6 +363,19 @@ function exitSettings() {
   updateWindowSize();
 }
 
+// 进入 Workflow 手动运行器
+function enterWorkflow() {
+  workflowMode.value = true;
+  searchStore.clearSearch();
+  updateWindowSize();
+}
+
+// 退出 Workflow，返回启动器
+function exitWorkflow() {
+  workflowMode.value = false;
+  updateWindowSize();
+}
+
 // 进入插件管理模式
 function enterPluginManager() {
   pluginManagerMode.value = true;
@@ -406,7 +434,7 @@ async function updateWindowSize() {
 // 搜索结果到达（防抖后异步）时重新计算窗口高度，
 // 否则单次输入（如粘贴一整段）会用空结果算出 60px，列表被裁掉
 watch(() => searchStore.results, () => {
-  if (!pluginMode.value && !settingsMode.value && !pluginManagerMode.value && !agentMode.value) {
+  if (!pluginMode.value && !settingsMode.value && !workflowMode.value && !pluginManagerMode.value && !agentMode.value) {
     updateWindowSize();
   }
 });
@@ -439,13 +467,13 @@ onMounted(async () => {
   const unlistenPluginsChanged = await listen('plugins-changed', () => {
     if (pluginMode.value && currentPlugin.value) {
       pluginReloadKey.value++;
-    } else if (!settingsMode.value && !pluginManagerMode.value && !agentMode.value) {
+    } else if (!settingsMode.value && !workflowMode.value && !pluginManagerMode.value && !agentMode.value) {
       searchStore.search(searchStore.query);
     }
   });
   const unlisten = await mainWindow.onFocusChanged(({ payload }: { payload: boolean }) => {
-    if (!payload && hideOnBlur.value && !nativeDialogOpen.value && !settingsMode.value && !pluginManagerMode.value && !pluginMode.value && !agentMode.value) {
-      // 失焦时隐藏（用户可在设置中关闭；排除原生对话框打开中、设置模式、插件管理模式、插件模式和 Agent 模式）
+    if (!payload && hideOnBlur.value && !nativeDialogOpen.value && !settingsMode.value && !workflowMode.value && !pluginManagerMode.value && !pluginMode.value && !agentMode.value) {
+      // 失焦时隐藏（用户可在设置中关闭；排除原生对话框打开中、设置模式、插件管理模式、插件模式、Workflow 模式和 Agent 模式）
       // list 命令模式：失焦隐藏同时销毁 iframe、退出模式
       if (listCommandMode.value) {
         exitListCommand();
@@ -467,6 +495,11 @@ onMounted(async () => {
     <!-- 设置模式 -->
     <template v-if="settingsMode">
       <SettingsView @back="exitSettings" />
+    </template>
+
+    <!-- Workflow 手动运行器 -->
+    <template v-else-if="workflowMode">
+      <WorkflowView @back="exitWorkflow" />
     </template>
 
     <!-- Agent 模式 -->

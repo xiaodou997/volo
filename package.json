@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc --noEmit && vite build",
-    "test:frontend": "node --test tests/pluginHost.test.mjs tests/agentTimeline.test.mjs tests/agentAttachments.test.mjs",
+    "test:frontend": "node --test tests/pluginHost.test.mjs tests/agentTimeline.test.mjs tests/agentAttachments.test.mjs tests/workflowModel.test.mjs",
     "preview": "vite preview",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
