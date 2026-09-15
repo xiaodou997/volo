@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, shallowRef } from 'vue';
+import { onMounted, ref, shallowRef } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 import {
   DEFAULT_WORKFLOW_INPUT,
@@ -7,9 +7,11 @@ import {
   formatWorkflowValue,
   parseWorkflowDefinition,
   parseWorkflowInput,
+  toWorkflowOptions,
   workflowStepLabel,
   type WorkflowDefinition,
   type WorkflowExecution,
+  type WorkflowOption,
 } from '../workflow/model';
 
 defineEmits<{ back: [] }>();
@@ -17,9 +19,15 @@ defineEmits<{ back: [] }>();
 const workflowText = ref(DEFAULT_WORKFLOW_TEXT);
 const inputText = ref(DEFAULT_WORKFLOW_INPUT);
 const running = ref(false);
+const storageBusy = ref(false);
+const selectedWorkflowId = ref('');
+const storageStatus = ref('');
 const error = ref('');
-// Execution/definition 都按一次赋值整体替换，不需要 Vue 深层代理；shallowRef 还能避免
-// vue-tsc 在模板中递归展开 JSON 数据结构。
+
+// 完整定义和 execution 都按整体值替换，不需要 Vue 深层代理；模板只遍历扁平 options，
+// 避免 vue-tsc 再次递归展开 Workflow 的 JsonValue 类型。
+const savedWorkflows = shallowRef<WorkflowDefinition[]>([]);
+const savedOptions = shallowRef<WorkflowOption[]>([]);
 const execution = shallowRef<WorkflowExecution | null>(null);
 const lastWorkflow = shallowRef<WorkflowDefinition | null>(null);
 
@@ -30,6 +38,83 @@ function errorText(value: unknown): string {
     return JSON.stringify(value);
   } catch {
     return String(value);
+  }
+}
+
+async function refreshWorkflows(selectId?: string) {
+  const workflows = await invoke<WorkflowDefinition[]>('workflow_list');
+  savedWorkflows.value = workflows;
+  savedOptions.value = toWorkflowOptions(workflows);
+
+  if (selectId && workflows.some((workflow) => workflow.id === selectId)) {
+    selectedWorkflowId.value = selectId;
+  } else if (
+    selectedWorkflowId.value &&
+    !workflows.some((workflow) => workflow.id === selectedWorkflowId.value)
+  ) {
+    selectedWorkflowId.value = '';
+  }
+}
+
+function loadSelectedWorkflow() {
+  const workflow = savedWorkflows.value.find(
+    (item) => item.id === selectedWorkflowId.value,
+  );
+  if (!workflow) return;
+
+  workflowText.value = JSON.stringify(workflow, null, 2);
+  execution.value = null;
+  lastWorkflow.value = null;
+  error.value = '';
+  storageStatus.value = `已加载 ${workflow.name}`;
+}
+
+async function saveWorkflowDefinition() {
+  if (storageBusy.value) return;
+
+  error.value = '';
+  storageStatus.value = '';
+
+  try {
+    const workflow = parseWorkflowDefinition(workflowText.value);
+    const previousId = selectedWorkflowId.value;
+    storageBusy.value = true;
+
+    await invoke('workflow_save', { workflow });
+    await refreshWorkflows(workflow.id);
+    storageStatus.value =
+      previousId && previousId !== workflow.id
+        ? `已另存为 ${workflow.name}`
+        : `已保存 ${workflow.name}`;
+  } catch (value) {
+    error.value = errorText(value);
+  } finally {
+    storageBusy.value = false;
+  }
+}
+
+async function deleteSelectedWorkflow() {
+  if (storageBusy.value || !selectedWorkflowId.value) return;
+
+  const workflow = savedWorkflows.value.find(
+    (item) => item.id === selectedWorkflowId.value,
+  );
+  if (!workflow) return;
+  if (!window.confirm(`删除 Workflow「${workflow.name}」？`)) return;
+
+  error.value = '';
+  storageStatus.value = '';
+
+  try {
+    storageBusy.value = true;
+    await invoke('workflow_delete', { workflowId: workflow.id });
+    selectedWorkflowId.value = '';
+    await refreshWorkflows();
+    storageStatus.value = `已删除 ${workflow.name}`;
+  } catch (value) {
+    error.value = errorText(value);
+  } finally {
+    storageBusy.value = false;
   }
 }
 
@@ -54,6 +139,12 @@ async function runWorkflow() {
     running.value = false;
   }
 }
+
+onMounted(() => {
+  void refreshWorkflows().catch((value) => {
+    error.value = errorText(value);
+  });
+});
 </script>
 
 <template>
@@ -75,7 +166,44 @@ async function runWorkflow() {
 
     <div class="workflow-body">
       <section class="editor-pane">
-        <div class="pane-title">
+        <div class="library-bar">
+          <select
+            v-model="selectedWorkflowId"
+            class="workflow-select"
+            :disabled="storageBusy"
+            aria-label="已保存 Workflow"
+            @change="loadSelectedWorkflow"
+          >
+            <option value="">已保存 Workflow</option>
+            <option
+              v-for="workflow in savedOptions"
+              :key="workflow.id"
+              :value="workflow.id"
+            >
+              {{ workflow.name }}
+            </option>
+          </select>
+          <button
+            class="secondary-btn"
+            :disabled="storageBusy"
+            @click="saveWorkflowDefinition"
+          >
+            {{ storageBusy ? '处理中…' : '保存' }}
+          </button>
+          <button
+            class="danger-btn"
+            :disabled="storageBusy || !selectedWorkflowId"
+            @click="deleteSelectedWorkflow"
+          >
+            删除
+          </button>
+        </div>
+
+        <div v-if="storageStatus" class="storage-status">
+          {{ storageStatus }}
+        </div>
+
+        <div class="pane-title workflow-title">
           <strong>Workflow JSON</strong>
           <span>Tool / AI steps</span>
         </div>
@@ -257,6 +385,69 @@ async function runWorkflow() {
   flex-direction: column;
 }
 
+.library-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+}
+
+.workflow-select {
+  min-width: 0;
+  flex: 1;
+  height: 30px;
+  padding: 0 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 7px;
+  outline: none;
+  color: var(--text-primary);
+  background: var(--bg-secondary);
+  font-size: 11px;
+}
+
+.workflow-select:focus {
+  border-color: var(--accent-color);
+}
+
+.secondary-btn,
+.danger-btn {
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 7px;
+  background: var(--bg-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.secondary-btn {
+  color: var(--text-primary);
+}
+
+.danger-btn {
+  color: var(--danger-color);
+}
+
+.secondary-btn:hover:not(:disabled),
+.danger-btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+.secondary-btn:disabled,
+.danger-btn:disabled,
+.workflow-select:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.storage-status {
+  margin-top: 5px;
+  color: var(--text-tertiary);
+  font-size: 10px;
+  line-height: 1.4;
+}
+
 .pane-title {
   min-height: 24px;
   display: flex;
@@ -274,6 +465,10 @@ async function runWorkflow() {
 .pane-title span {
   font-size: 11px;
   color: var(--text-tertiary);
+}
+
+.workflow-title {
+  margin-top: 7px;
 }
 
 .input-title {
