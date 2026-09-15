@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue';
+import { ref, shallowRef } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 import {
   DEFAULT_WORKFLOW_INPUT,
@@ -18,8 +18,10 @@ const workflowText = ref(DEFAULT_WORKFLOW_TEXT);
 const inputText = ref(DEFAULT_WORKFLOW_INPUT);
 const running = ref(false);
 const error = ref('');
-const execution = ref<WorkflowExecution | null>(null);
-const lastWorkflow = ref<WorkflowDefinition | null>(null);
+// Execution/definition 都按一次赋值整体替换，不需要 Vue 深层代理；shallowRef 还能避免
+// vue-tsc 在模板中递归展开 JSON 数据结构。
+const execution = shallowRef<WorkflowExecution | null>(null);
+const lastWorkflow = shallowRef<WorkflowDefinition | null>(null);
 
 function errorText(value: unknown): string {
   if (value instanceof Error) return value.message;
