@@ -24,10 +24,13 @@ export interface WorkflowDefinition {
 export type WorkflowExecutionStatus = 'completed' | 'failed';
 export type WorkflowStepStatus = 'completed' | 'failed';
 
+// Execution 是后端 IPC 返回的只读展示 DTO。output 对 UI 来说只需要格式化展示，
+// 使用 unknown 可避免 Vue 模板对递归 JsonValue 做深层类型展开；Workflow 定义/Input
+// 仍保持严格 JsonValue 约束。
 export interface WorkflowStepExecution {
   stepId: string;
   status: WorkflowStepStatus;
-  output?: JsonValue;
+  output?: unknown;
   error?: string;
 }
 
@@ -35,7 +38,7 @@ export interface WorkflowExecution {
   workflowId: string;
   status: WorkflowExecutionStatus;
   steps: WorkflowStepExecution[];
-  output?: JsonValue;
+  output?: unknown;
   error?: string;
 }
 
@@ -92,8 +95,6 @@ export function parseWorkflowInput(text: string): JsonValue {
   }
 }
 
-// 展示层不需要递归展开 JsonValue 的静态类型。使用 unknown 可以避免 vue-tsc
-// 在模板表达式中对递归 JSON 类型进行无限深推导，同时保持运行时格式化行为不变。
 export function formatWorkflowValue(value: unknown, maxChars = 1200): string {
   if (value === undefined) return '';
 
