@@ -21,6 +21,11 @@ export interface WorkflowDefinition {
   steps: WorkflowStep[];
 }
 
+export interface WorkflowOption {
+  id: string;
+  name: string;
+}
+
 export type WorkflowExecutionStatus = 'completed' | 'failed';
 export type WorkflowStepStatus = 'completed' | 'failed';
 
@@ -93,6 +98,10 @@ export function parseWorkflowInput(text: string): JsonValue {
   } catch (error) {
     throw new Error(`Input JSON 解析失败: ${error instanceof Error ? error.message : String(error)}`);
   }
+}
+
+export function toWorkflowOptions(workflows: readonly WorkflowDefinition[]): WorkflowOption[] {
+  return workflows.map(({ id, name }) => ({ id, name }));
 }
 
 export function formatWorkflowValue(value: unknown, maxChars = 1200): string {
