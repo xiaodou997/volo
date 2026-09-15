@@ -6,6 +6,7 @@ import {
   formatWorkflowValue,
   parseWorkflowDefinition,
   parseWorkflowInput,
+  toWorkflowOptions,
   workflowStepLabel,
 } from '../src/workflow/model.ts';
 
@@ -31,6 +32,13 @@ test('invalid workflow JSON produces a user-facing parse error', () => {
     () => parseWorkflowDefinition('{"id":"x","name":"X"}'),
     /steps 数组/,
   );
+});
+
+test('saved workflow options stay flat and do not expose recursive steps', () => {
+  const workflow = parseWorkflowDefinition(DEFAULT_WORKFLOW_TEXT);
+  assert.deepEqual(toWorkflowOptions([workflow]), [
+    { id: 'clipboard-notify', name: 'Clipboard Notify' },
+  ]);
 });
 
 test('formatting preserves strings and truncates large structured values', () => {
