@@ -73,6 +73,7 @@ pub fn run() {
             ai::workflow::commands::workflow_list,
             ai::workflow::commands::workflow_save,
             ai::workflow::commands::workflow_delete,
+            ai::workflow::commands::workflow_list_runs,
             ai::workflow::commands::workflow_run,
             // Skill
             ai::skill::skill_list,
