@@ -13,6 +13,7 @@ import ResultList from './components/ResultList.vue';
 import PluginView from './components/PluginView.vue';
 import SubInput from './components/SubInput.vue';
 import SettingsView from './components/SettingsView.vue';
+import WorkflowView from './components/WorkflowView.vue';
 import AgentView from './components/AgentView.vue';
 import PluginManager from './components/PluginManager.vue';
 import ApprovalDialog from './components/ApprovalDialog.vue';
@@ -30,6 +31,7 @@ const searchStore = useSearchStore();
 // 插件状态
 const pluginMode = ref(false);
 const settingsMode = ref(false);
+const workflowMode = ref(false);
 const pluginManagerMode = ref(false);
 const agentMode = ref(false);
 const agentQuery = ref('');
@@ -60,6 +62,10 @@ const windowHeight = computed(() => {
 
   if (settingsMode.value) {
     return 450; // 设置模式固定高度
+  }
+
+  if (workflowMode.value) {
+    return 520; // Workflow 编辑器 + execution timeline
   }
 
   if (agentMode.value) {
@@ -108,6 +114,12 @@ function handleInput(value: string) {
     return;
   }
 
+  // Workflow MVP 入口：保持和 settings/plugins 一致的启动器命令语义
+  if (value.toLowerCase() === 'workflow' || value === '工作流') {
+    enterWorkflow();
+    return;
+  }
+
   // 检查是否是插件管理命令
   if (value.toLowerCase() === 'plugins' || value === '插件') {
     enterPluginManager();
@@ -134,6 +146,9 @@ function handleClear() {
   } else if (settingsMode.value) {
     // 退出设置模式
     exitSettings();
+  } else if (workflowMode.value) {
+    // 退出 Workflow 模式
+    exitWorkflow();
   } else if (pluginManagerMode.value) {
     // 退出插件管理模式
     exitPluginManager();
@@ -147,76 +162,76 @@ function handleClear() {
 }
 
 // 处理确认
-  async function handleConfirm() {
-    const result = searchStore.selectedResult;
-    if (!result) return;
+async function handleConfirm() {
+  const result = searchStore.selectedResult;
+  if (!result) return;
 
-    if (listCommandMode.value) {
-      // list 命令模式：回车选中某项，触发命令的 onSelect(id)；
-      // 命令执行完动作后调 command.done()，由 onDone 回调退出模式并隐藏窗口
-      if (result.type === 'command-item') {
-        // 动作面板打开中：选中的是动作，触发 onAction(itemId, actionId)
-        if (actionPanelItem.value) {
-          listHandle?.action(actionPanelItem.value.id, result.item.id);
-        } else {
-          listHandle?.select(result.item.id);
-        }
-      }
-      return;
-    }
-
-    if (result.type === 'app') {
-      // 记录使用历史（frecency 排序用）
-      invoke('record_item_usage', { key: result.path }).catch(() => {});
-
-      // 打开应用
-      await invoke('shell_open_path', { path: result.path });
-      // 隐藏窗口
-      await invoke('hide_main_window');
-      // 清空搜索
-      searchStore.clearSearch();
-      updateWindowSize();
-    } else if (result.type === 'plugin') {
-      // 记录使用历史：插件功能 key 为 pluginId#featureId
-      invoke('record_item_usage', { key: `${result.plugin.id}#${result.feature.id}` }).catch(() => {});
-      // 进入插件模式
-      enterPlugin(result.plugin.id, result.feature.id);
-    } else if (result.type === 'command') {
-      // 记录使用历史：命令 key 为 pluginId#commandId（list 与 run 都记）
-      invoke('record_item_usage', { key: `${result.plugin.id}#${result.command.id}` }).catch(() => {});
-      if (result.command.mode === 'list') {
-        // list 模式命令：不隐藏窗口，进入 list 命令模式
-        void enterListCommand(result.plugin.id, result.command.id);
+  if (listCommandMode.value) {
+    // list 命令模式：回车选中某项，触发命令的 onSelect(id)；
+    // 命令执行完动作后调 command.done()，由 onDone 回调退出模式并隐藏窗口
+    if (result.type === 'command-item') {
+      // 动作面板打开中：选中的是动作，触发 onAction(itemId, actionId)
+      if (actionPanelItem.value) {
+        listHandle?.action(actionPanelItem.value.id, result.item.id);
       } else {
-        // 后台执行无界面命令（错误由 commandRunner 通知），清空搜索并隐藏窗口
-        void runCommand(result.plugin.id, result.command.id, searchStore.query);
-        searchStore.clearSearch();
-        updateWindowSize();
-        await invoke('hide_main_window');
+        listHandle?.select(result.item.id);
       }
-    } else if (result.type === 'file') {
-      // 打开文件或文件夹
-      await invoke('shell_open_path', { path: result.path });
-      // 隐藏窗口
-      await invoke('hide_main_window');
-      // 清空搜索
-      searchStore.clearSearch();
-      updateWindowSize();
-    } else if (result.type === 'skill-entry') {
-      // @技能名 候选：补全输入为 "@name "，继续输入问题后回车发问
-      searchStore.search(`@${result.skill.name} `);
-    } else if (result.type === 'ai') {
-      // 未配置 LLM 时引导去设置页，否则进入 Agent 模式（skill 为 @技能名 显式触发）
-      if (!searchStore.llmConfigured) {
-        enterSettings();
-      } else {
-        enterAgent(result.query, result.skill);
-      }
-    } else if (result.type === 'ai-history') {
-      // 空输入入口：直达 AI 会话历史（可回放、继续对话）
-      enterAgentHistory();
     }
+    return;
   }
+
+  if (result.type === 'app') {
+    // 记录使用历史（frecency 排序用）
+    invoke('record_item_usage', { key: result.path }).catch(() => {});
+
+    // 打开应用
+    await invoke('shell_open_path', { path: result.path });
+    // 隐藏窗口
+    await invoke('hide_main_window');
+    // 清空搜索
+    searchStore.clearSearch();
+    updateWindowSize();
+  } else if (result.type === 'plugin') {
+    // 记录使用历史：插件功能 key 为 pluginId#featureId
+    invoke('record_item_usage', { key: `${result.plugin.id}#${result.feature.id}` }).catch(() => {});
+    // 进入插件模式
+    enterPlugin(result.plugin.id, result.feature.id);
+  } else if (result.type === 'command') {
+    // 记录使用历史：命令 key 为 pluginId#commandId（list 与 run 都记）
+    invoke('record_item_usage', { key: `${result.plugin.id}#${result.command.id}` }).catch(() => {});
+    if (result.command.mode === 'list') {
+      // list 模式命令：不隐藏窗口，进入 list 命令模式
+      void enterListCommand(result.plugin.id, result.command.id);
+    } else {
+      // 后台执行无界面命令（错误由 commandRunner 通知），清空搜索并隐藏窗口
+      void runCommand(result.plugin.id, result.command.id, searchStore.query);
+      searchStore.clearSearch();
+      updateWindowSize();
+      await invoke('hide_main_window');
+    }
+  } else if (result.type === 'file') {
+    // 打开文件或文件夹
+    await invoke('shell_open_path', { path: result.path });
+    // 隐藏窗口
+    await invoke('hide_main_window');
+    // 清空搜索
+    searchStore.clearSearch();
+    updateWindowSize();
+  } else if (result.type === 'skill-entry') {
+    // @技能名 候选：补全输入为 "@name "，继续输入问题后回车发问
+    searchStore.search(`@${result.skill.name} `);
+  } else if (result.type === 'ai') {
+    // 未配置 LLM 时引导去设置页，否则进入 Agent 模式（skill 为 @技能名 显式触发）
+    if (!searchStore.llmConfigured) {
+      enterSettings();
+    } else {
+      enterAgent(result.query, result.skill);
+    }
+  } else if (result.type === 'ai-history') {
+    // 空输入入口：直达 AI 会话历史（可回放、继续对话）
+    enterAgentHistory();
+  }
+}
 
 // 进入 Agent 模式（启动器入口永远是新会话；清空失败也继续；skill 为 @技能名 显式触发）
 async function enterAgent(query: string, skill?: string) {
@@ -270,7 +285,7 @@ function closeActionPanel() {
   listHandle?.setQuery(searchStore.query);
 }
 
-// 进入 list 命令模式：清空搜索作为过滤输入，启动隐藏 iframe 并触发 onRun('')
+// 进入 list 命令模式：清空搜索作为过滤输入，启动隐藏 iframe并触发 onRun('')
 async function enterListCommand(pluginId: string, commandId: string) {
   searchStore.clearSearch();
   listCommandMode.value = true;
@@ -320,7 +335,8 @@ function exitListCommand() {
 }
 
 // 进入插件模式
-function enterPlugin(pluginId: string, featureId: string) {  currentPlugin.value = { pluginId, featureId };
+function enterPlugin(pluginId: string, featureId: string) {
+  currentPlugin.value = { pluginId, featureId };
   pluginMode.value = true;
   subInputVisible.value = false;
   updateWindowSize();
@@ -345,6 +361,19 @@ function enterSettings() {
 // 退出设置模式
 function exitSettings() {
   settingsMode.value = false;
+  updateWindowSize();
+}
+
+// 进入 Workflow 手动运行器
+function enterWorkflow() {
+  workflowMode.value = true;
+  searchStore.clearSearch();
+  updateWindowSize();
+}
+
+// 退出 Workflow，返回启动器
+function exitWorkflow() {
+  workflowMode.value = false;
   updateWindowSize();
 }
 
@@ -406,7 +435,7 @@ async function updateWindowSize() {
 // 搜索结果到达（防抖后异步）时重新计算窗口高度，
 // 否则单次输入（如粘贴一整段）会用空结果算出 60px，列表被裁掉
 watch(() => searchStore.results, () => {
-  if (!pluginMode.value && !settingsMode.value && !pluginManagerMode.value && !agentMode.value) {
+  if (!pluginMode.value && !settingsMode.value && !workflowMode.value && !pluginManagerMode.value && !agentMode.value) {
     updateWindowSize();
   }
 });
@@ -439,13 +468,13 @@ onMounted(async () => {
   const unlistenPluginsChanged = await listen('plugins-changed', () => {
     if (pluginMode.value && currentPlugin.value) {
       pluginReloadKey.value++;
-    } else if (!settingsMode.value && !pluginManagerMode.value && !agentMode.value) {
+    } else if (!settingsMode.value && !workflowMode.value && !pluginManagerMode.value && !agentMode.value) {
       searchStore.search(searchStore.query);
     }
   });
   const unlisten = await mainWindow.onFocusChanged(({ payload }: { payload: boolean }) => {
-    if (!payload && hideOnBlur.value && !nativeDialogOpen.value && !settingsMode.value && !pluginManagerMode.value && !pluginMode.value && !agentMode.value) {
-      // 失焦时隐藏（用户可在设置中关闭；排除原生对话框打开中、设置模式、插件管理模式、插件模式和 Agent 模式）
+    if (!payload && hideOnBlur.value && !nativeDialogOpen.value && !settingsMode.value && !workflowMode.value && !pluginManagerMode.value && !pluginMode.value && !agentMode.value) {
+      // 失焦时隐藏（用户可在设置中关闭；排除原生对话框和各完整视图模式）
       // list 命令模式：失焦隐藏同时销毁 iframe、退出模式
       if (listCommandMode.value) {
         exitListCommand();
@@ -467,6 +496,11 @@ onMounted(async () => {
     <!-- 设置模式 -->
     <template v-if="settingsMode">
       <SettingsView @back="exitSettings" />
+    </template>
+
+    <!-- Workflow 手动运行器 -->
+    <template v-else-if="workflowMode">
+      <WorkflowView @back="exitWorkflow" />
     </template>
 
     <!-- Agent 模式 -->
