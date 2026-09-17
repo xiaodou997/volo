@@ -4,14 +4,18 @@ import { invoke } from '@tauri-apps/api/core';
 import {
   DEFAULT_WORKFLOW_INPUT,
   DEFAULT_WORKFLOW_TEXT,
+  formatWorkflowRunDuration,
   formatWorkflowValue,
   parseWorkflowDefinition,
   parseWorkflowInput,
   toWorkflowOptions,
+  workflowRunErrorText,
+  workflowRunFailedStep,
   workflowStepLabel,
   type WorkflowDefinition,
   type WorkflowExecution,
   type WorkflowOption,
+  type WorkflowRunRecord,
 } from '../workflow/model';
 
 defineEmits<{ back: [] }>();
@@ -20,16 +24,19 @@ const workflowText = ref(DEFAULT_WORKFLOW_TEXT);
 const inputText = ref(DEFAULT_WORKFLOW_INPUT);
 const running = ref(false);
 const storageBusy = ref(false);
+const historyBusy = ref(false);
 const selectedWorkflowId = ref('');
 const storageStatus = ref('');
 const error = ref('');
+const historyError = ref('');
+const resultMode = ref<'current' | 'history'>('current');
 
-// 完整定义和 execution 都按整体值替换，不需要 Vue 深层代理；模板只遍历扁平 options，
-// 避免 vue-tsc 再次递归展开 Workflow 的 JsonValue 类型。
+// 完整定义、execution 和 history 都按整体值替换，不需要 Vue 深层代理。
 const savedWorkflows = shallowRef<WorkflowDefinition[]>([]);
 const savedOptions = shallowRef<WorkflowOption[]>([]);
 const execution = shallowRef<WorkflowExecution | null>(null);
 const lastWorkflow = shallowRef<WorkflowDefinition | null>(null);
+const runHistory = shallowRef<WorkflowRunRecord[]>([]);
 
 function errorText(value: unknown): string {
   if (value instanceof Error) return value.message;
@@ -39,6 +46,19 @@ function errorText(value: unknown): string {
   } catch {
     return String(value);
   }
+}
+
+function formatRunStartedAt(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString(undefined, {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  });
 }
 
 async function refreshWorkflows(selectId?: string) {
@@ -53,6 +73,22 @@ async function refreshWorkflows(selectId?: string) {
     !workflows.some((workflow) => workflow.id === selectedWorkflowId.value)
   ) {
     selectedWorkflowId.value = '';
+  }
+}
+
+async function refreshRunHistory() {
+  if (historyBusy.value) return;
+
+  historyBusy.value = true;
+  historyError.value = '';
+  try {
+    runHistory.value = await invoke<WorkflowRunRecord[]>('workflow_list_runs', {
+      workflowId: null,
+    });
+  } catch (value) {
+    historyError.value = errorText(value);
+  } finally {
+    historyBusy.value = false;
   }
 }
 
@@ -123,6 +159,7 @@ async function runWorkflow() {
 
   error.value = '';
   execution.value = null;
+  resultMode.value = 'current';
 
   try {
     const workflow = parseWorkflowDefinition(workflowText.value);
@@ -137,6 +174,7 @@ async function runWorkflow() {
     error.value = errorText(value);
   } finally {
     running.value = false;
+    void refreshRunHistory();
   }
 }
 
@@ -144,6 +182,7 @@ onMounted(() => {
   void refreshWorkflows().catch((value) => {
     error.value = errorText(value);
   });
+  void refreshRunHistory();
 });
 </script>
 
@@ -234,54 +273,115 @@ onMounted(() => {
       </section>
 
       <section class="result-pane">
-        <div class="pane-title">
-          <strong>Execution</strong>
-          <span v-if="execution" :class="['status-text', execution.status]">
+        <div class="result-header">
+          <div class="result-tabs" role="tablist" aria-label="Workflow 结果视图">
+            <button
+              :class="['result-tab', { active: resultMode === 'current' }]"
+              @click="resultMode = 'current'"
+            >
+              本次执行
+            </button>
+            <button
+              :class="['result-tab', { active: resultMode === 'history' }]"
+              @click="resultMode = 'history'"
+            >
+              最近运行
+              <span v-if="runHistory.length" class="tab-count">{{ runHistory.length }}</span>
+            </button>
+          </div>
+          <span
+            v-if="resultMode === 'current' && execution"
+            :class="['status-text', execution.status]"
+          >
             {{ execution.status === 'completed' ? 'Completed' : 'Failed' }}
           </span>
-          <span v-else>运行后显示 step timeline</span>
+          <span v-else-if="resultMode === 'history'" class="audit-hint">仅审计元数据</span>
         </div>
 
-        <div v-if="error" class="command-error">
-          {{ error }}
-        </div>
+        <template v-if="resultMode === 'current'">
+          <div v-if="error" class="command-error">
+            {{ error }}
+          </div>
 
-        <div v-else-if="!execution" class="empty-state">
-          <div class="empty-icon">▶</div>
-          <strong>运行一个 Workflow</strong>
-          <span>默认示例会读取剪贴板，并把结果传给系统通知。</span>
-        </div>
+          <div v-else-if="!execution" class="empty-state">
+            <div class="empty-icon">▶</div>
+            <strong>运行一个 Workflow</strong>
+            <span>默认示例会读取剪贴板，并把结果传给系统通知。</span>
+          </div>
 
-        <div v-else class="execution-content">
-          <div class="timeline">
-            <article
-              v-for="(step, index) in execution.steps"
-              :key="`${step.stepId}-${index}`"
-              class="step-card"
-            >
-              <div class="step-line">
-                <div :class="['step-dot', step.status]"></div>
-                <div class="step-heading">
-                  <strong>{{ workflowStepLabel(lastWorkflow, step.stepId) }}</strong>
-                  <span>#{{ index + 1 }}</span>
+          <div v-else class="execution-content">
+            <div class="timeline">
+              <article
+                v-for="(step, index) in execution.steps"
+                :key="`${step.stepId}-${index}`"
+                class="step-card"
+              >
+                <div class="step-line">
+                  <div :class="['step-dot', step.status]"></div>
+                  <div class="step-heading">
+                    <strong>{{ workflowStepLabel(lastWorkflow, step.stepId) }}</strong>
+                    <span>#{{ index + 1 }}</span>
+                  </div>
+                  <span :class="['step-status', step.status]">
+                    {{ step.status === 'completed' ? '完成' : '失败' }}
+                  </span>
                 </div>
-                <span :class="['step-status', step.status]">
-                  {{ step.status === 'completed' ? '完成' : '失败' }}
+
+                <pre v-if="step.error" class="step-detail error-detail">{{ step.error }}</pre>
+                <pre v-else-if="step.output !== undefined" class="step-detail">{{ formatWorkflowValue(step.output) }}</pre>
+              </article>
+            </div>
+
+            <div v-if="execution.error" class="final-card failed">
+              <span>Workflow error</span>
+              <pre>{{ execution.error }}</pre>
+            </div>
+            <div v-else-if="execution.output !== undefined" class="final-card completed">
+              <span>Final output</span>
+              <pre>{{ formatWorkflowValue(execution.output) }}</pre>
+            </div>
+          </div>
+        </template>
+
+        <div v-else class="history-content">
+          <div v-if="historyError" class="command-error history-error">
+            {{ historyError }}
+            <button class="inline-retry" :disabled="historyBusy" @click="refreshRunHistory">
+              重试
+            </button>
+          </div>
+
+          <div v-else-if="historyBusy && runHistory.length === 0" class="history-empty">
+            正在读取运行记录…
+          </div>
+
+          <div v-else-if="runHistory.length === 0" class="history-empty">
+            还没有运行记录。执行一次 Workflow 后，这里会显示审计信息。
+          </div>
+
+          <div v-else class="history-list">
+            <article v-for="run in runHistory" :key="run.id" class="run-card">
+              <div class="run-heading">
+                <div class="run-title">
+                  <span :class="['run-dot', run.status]"></span>
+                  <strong>{{ run.workflowName || run.workflowId }}</strong>
+                </div>
+                <span class="run-duration">{{ formatWorkflowRunDuration(run.durationMs) }}</span>
+              </div>
+
+              <div class="run-meta">
+                <span>{{ formatRunStartedAt(run.startedAt) }}</span>
+                <span>{{ run.steps.length }} steps</span>
+                <span :class="['run-status', run.status]">
+                  {{ run.status === 'completed' ? '完成' : '失败' }}
                 </span>
               </div>
 
-              <pre v-if="step.error" class="step-detail error-detail">{{ step.error }}</pre>
-              <pre v-else-if="step.output !== undefined" class="step-detail">{{ formatWorkflowValue(step.output) }}</pre>
+              <div v-if="run.status === 'failed'" class="run-failure">
+                <code>{{ workflowRunFailedStep(run)?.stepId || 'workflow' }}</code>
+                <span>{{ workflowRunErrorText(run) }}</span>
+              </div>
             </article>
-          </div>
-
-          <div v-if="execution.error" class="final-card failed">
-            <span>Workflow error</span>
-            <pre>{{ execution.error }}</pre>
-          </div>
-          <div v-else-if="execution.output !== undefined" class="final-card completed">
-            <span>Final output</span>
-            <pre>{{ formatWorkflowValue(execution.output) }}</pre>
           </div>
         </div>
       </section>
@@ -448,10 +548,11 @@ onMounted(() => {
   line-height: 1.4;
 }
 
-.pane-title {
+.pane-title,
+.result-header {
   min-height: 24px;
   display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
   gap: 12px;
   margin-bottom: 7px;
@@ -462,7 +563,8 @@ onMounted(() => {
   font-weight: 650;
 }
 
-.pane-title span {
+.pane-title span,
+.audit-hint {
   font-size: 11px;
   color: var(--text-tertiary);
 }
@@ -529,13 +631,47 @@ onMounted(() => {
   user-select: text;
 }
 
+.result-tabs {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px;
+  border-radius: 7px;
+  background: var(--bg-secondary);
+}
+
+.result-tab {
+  height: 25px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 5px;
+  color: var(--text-tertiary);
+  background: transparent;
+  font-size: 10px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.result-tab.active {
+  color: var(--text-primary);
+  background: var(--bg-primary);
+}
+
+.tab-count {
+  margin-left: 3px;
+  color: var(--text-tertiary);
+  font-size: 9px;
+}
+
 .status-text.completed,
-.step-status.completed {
+.step-status.completed,
+.run-status.completed {
   color: #34c759;
 }
 
 .status-text.failed,
-.step-status.failed {
+.step-status.failed,
+.run-status.failed {
   color: var(--danger-color);
 }
 
@@ -584,48 +720,56 @@ onMounted(() => {
   user-select: text;
 }
 
-.execution-content {
+.execution-content,
+.history-content {
   min-height: 0;
   flex: 1;
   overflow-y: auto;
   padding-right: 2px;
 }
 
-.timeline {
+.timeline,
+.history-list {
   display: flex;
   flex-direction: column;
   gap: 8px;
 }
 
 .step-card,
-.final-card {
+.final-card,
+.run-card {
   border: 1px solid var(--border-color);
   border-radius: 8px;
   background: var(--bg-secondary);
 }
 
-.step-card {
+.step-card,
+.run-card {
   padding: 9px 10px;
 }
 
-.step-line {
+.step-line,
+.run-heading {
   display: flex;
   align-items: center;
   gap: 8px;
 }
 
-.step-dot {
+.step-dot,
+.run-dot {
   width: 8px;
   height: 8px;
   flex: 0 0 8px;
   border-radius: 50%;
 }
 
-.step-dot.completed {
+.step-dot.completed,
+.run-dot.completed {
   background: #34c759;
 }
 
-.step-dot.failed {
+.step-dot.failed,
+.run-dot.failed {
   background: var(--danger-color);
 }
 
@@ -685,5 +829,88 @@ onMounted(() => {
   color: var(--text-tertiary);
   text-transform: uppercase;
   letter-spacing: 0.04em;
+}
+
+.history-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.inline-retry {
+  border: 0;
+  color: inherit;
+  background: transparent;
+  font-size: 10px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.history-empty {
+  padding: 26px 16px;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  line-height: 1.6;
+  text-align: center;
+}
+
+.run-title {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.run-title strong {
+  overflow: hidden;
+  font-size: 11px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.run-duration {
+  color: var(--text-tertiary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+}
+
+.run-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  color: var(--text-tertiary);
+  font-size: 10px;
+}
+
+.run-status {
+  margin-left: auto;
+}
+
+.run-failure {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  margin-top: 7px;
+  padding: 7px 8px;
+  border-radius: 6px;
+  color: var(--danger-color);
+  background: color-mix(in srgb, var(--danger-color) 7%, transparent);
+  font-size: 10px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.run-failure code {
+  flex: 0 0 auto;
+  padding: 1px 4px;
+  border-radius: 4px;
+  color: var(--danger-color);
+  background: color-mix(in srgb, var(--danger-color) 10%, transparent);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 </style>
