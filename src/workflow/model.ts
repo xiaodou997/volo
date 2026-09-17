@@ -47,6 +47,25 @@ export interface WorkflowExecution {
   error?: string;
 }
 
+// 持久化执行历史有意只包含审计元数据，不包含 input / step output / final output。
+export interface WorkflowRunStepRecord {
+  stepId: string;
+  status: WorkflowStepStatus;
+  error?: string;
+}
+
+export interface WorkflowRunRecord {
+  id: string;
+  workflowId: string;
+  workflowName: string;
+  startedAt: string;
+  finishedAt: string;
+  durationMs: number;
+  status: WorkflowExecutionStatus;
+  steps: WorkflowRunStepRecord[];
+  error?: string;
+}
+
 export const DEFAULT_WORKFLOW: WorkflowDefinition = {
   id: 'clipboard-notify',
   name: 'Clipboard Notify',
@@ -116,6 +135,29 @@ export function formatWorkflowValue(value: unknown, maxChars = 1200): string {
 
   if (rendered.length <= maxChars) return rendered;
   return `${rendered.slice(0, maxChars)}…`;
+}
+
+export function formatWorkflowRunDuration(durationMs: number): string {
+  if (durationMs < 1000) return `${durationMs} ms`;
+  if (durationMs < 60_000) {
+    const seconds = Math.round(durationMs / 100) / 10;
+    return `${seconds} s`;
+  }
+
+  const minutes = Math.floor(durationMs / 60_000);
+  const seconds = Math.floor((durationMs % 60_000) / 1000);
+  return seconds > 0 ? `${minutes}m ${seconds}s` : `${minutes}m`;
+}
+
+export function workflowRunFailedStep(run: WorkflowRunRecord): WorkflowRunStepRecord | null {
+  return run.steps.find((step) => step.status === 'failed') ?? null;
+}
+
+export function workflowRunErrorText(run: WorkflowRunRecord): string {
+  const failedStep = workflowRunFailedStep(run);
+  if (failedStep?.error) return failedStep.error;
+  if (run.error) return run.error;
+  return run.status === 'failed' ? '执行失败' : '';
 }
 
 export function workflowStepLabel(workflow: WorkflowDefinition | null, stepId: string): string {
