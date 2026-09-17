@@ -1,3 +1,6 @@
+use std::time::Instant;
+
+use chrono::Utc;
 use serde_json::Value;
 use tauri::{AppHandle, Manager};
 
@@ -14,6 +17,8 @@ use super::{
     WorkflowToolRunner,
 };
 
+#[path = "history.rs"]
+mod history;
 #[path = "storage.rs"]
 mod storage;
 
@@ -38,6 +43,18 @@ pub fn workflow_save(app: AppHandle, workflow: Workflow) -> Result<()> {
 #[tauri::command]
 pub fn workflow_delete(app: AppHandle, workflow_id: String) -> Result<()> {
     storage::delete_workflow(&storage::workflows_dir(&app)?, &workflow_id)
+}
+
+/// 列出最近的 Workflow 执行审计记录；workflow_id 为空时返回所有 Workflow。
+#[tauri::command]
+pub fn workflow_list_runs(
+    app: AppHandle,
+    workflow_id: Option<String>,
+) -> Result<Vec<history::WorkflowRunRecord>> {
+    history::list_runs(
+        &history::workflow_runs_dir(&app)?,
+        workflow_id.as_deref(),
+    )
 }
 
 /// 前台手动执行一个 Workflow。
@@ -76,6 +93,8 @@ pub async fn workflow_run(
         None
     };
 
+    let started_at = Utc::now();
+    let started = Instant::now();
     let principal = workflow_principal(&workflow.id);
     let mcp = app.state::<McpRegistry>();
 
@@ -99,7 +118,33 @@ pub async fn workflow_run(
         None => WorkflowToolRunner::new(&executor),
     };
 
-    execute_workflow(&workflow, input.unwrap_or(Value::Null), &runner).await
+    let execution = execute_workflow(&workflow, input.unwrap_or(Value::Null), &runner).await?;
+    let finished_at = Utc::now();
+    let duration_ms = started
+        .elapsed()
+        .as_millis()
+        .min(u128::from(u64::MAX)) as u64;
+    let record = history::build_record(
+        &workflow,
+        &execution,
+        started_at,
+        finished_at,
+        duration_ms,
+    );
+
+    // Audit 属于旁路能力：不能因为磁盘/目录问题把已经完成的 Workflow 改判为失败。
+    let audit_result = history::workflow_runs_dir(&app)
+        .and_then(|dir| history::record_run(&dir, &record));
+    if let Err(error) = audit_result {
+        tracing::warn!(
+            workflow_id = %workflow.id,
+            run_id = %record.id,
+            "persist workflow run audit failed: {}",
+            error
+        );
+    }
+
+    Ok(execution)
 }
 
 #[cfg(test)]
