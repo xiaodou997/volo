@@ -34,12 +34,17 @@ pub fn run() {
             // 关键启动流程必须完整成功。任何错误都直接终止 Tauri setup，
             // 避免 Config/Database/PermissionEngine 等 managed state 缺失后仍进入半初始化 UI。
             let app_handle = app.handle().clone();
+            let startup_handle = app_handle.clone();
             if let Err(e) = tauri::async_runtime::block_on(async move {
-                StartupManager::optimized_startup(&app_handle).await
+                StartupManager::optimized_startup(&startup_handle).await
             }) {
                 tracing::error!("Startup failed: {}", e);
                 return Err(Box::<dyn std::error::Error>::from(e));
             }
+
+            // 所有 managed state 初始化成功后再启动 Automation scheduler，
+            // 避免后台任务在 Config / PermissionEngine / MCP Registry 尚未就绪时运行。
+            ai::automation::scheduler::start(app_handle);
 
             Ok(())
         })
