@@ -3,10 +3,13 @@ import test from 'node:test';
 
 import {
   DEFAULT_WORKFLOW_TEXT,
+  formatWorkflowRunDuration,
   formatWorkflowValue,
   parseWorkflowDefinition,
   parseWorkflowInput,
   toWorkflowOptions,
+  workflowRunErrorText,
+  workflowRunFailedStep,
   workflowStepLabel,
 } from '../src/workflow/model.ts';
 
@@ -46,6 +49,35 @@ test('formatting preserves strings and truncates large structured values', () =>
   const rendered = formatWorkflowValue({ text: 'x'.repeat(100) }, 30);
   assert.equal(rendered.endsWith('…'), true);
   assert.equal(rendered.length, 31);
+});
+
+test('run duration formatting stays compact across millisecond, second and minute ranges', () => {
+  assert.equal(formatWorkflowRunDuration(420), '420 ms');
+  assert.equal(formatWorkflowRunDuration(1500), '1.5 s');
+  assert.equal(formatWorkflowRunDuration(12_040), '12 s');
+  assert.equal(formatWorkflowRunDuration(60_000), '1m');
+  assert.equal(formatWorkflowRunDuration(62_000), '1m 2s');
+});
+
+test('run failure helpers prefer the failed step and do not require persisted outputs', () => {
+  const run = {
+    id: 'run-1',
+    workflowId: 'demo',
+    workflowName: 'Demo',
+    startedAt: '2026-09-17T00:00:00.000Z',
+    finishedAt: '2026-09-17T00:00:00.500Z',
+    durationMs: 500,
+    status: 'failed',
+    steps: [
+      { stepId: 'read', status: 'completed' },
+      { stepId: 'notify', status: 'failed', error: 'permission denied' },
+    ],
+    error: 'workflow failed',
+  };
+
+  assert.equal(workflowRunFailedStep(run)?.stepId, 'notify');
+  assert.equal(workflowRunErrorText(run), 'permission denied');
+  assert.equal('output' in run, false);
 });
 
 test('step labels include tool names while AI steps remain concise', () => {
