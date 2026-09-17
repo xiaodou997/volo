@@ -75,6 +75,10 @@ pub fn run() {
             ai::workflow::commands::workflow_delete,
             ai::workflow::commands::workflow_list_runs,
             ai::workflow::commands::workflow_run,
+            // Automation
+            ai::automation::commands::automation_list,
+            ai::automation::commands::automation_save,
+            ai::automation::commands::automation_delete,
             // Skill
             ai::skill::skill_list,
             ai::skill::skill_install_from_dir,
