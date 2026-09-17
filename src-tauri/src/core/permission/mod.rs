@@ -2,9 +2,11 @@
 //! Capability 声明检查 + 运行时审批引擎 + 审计
 
 pub mod audit;
+pub mod background;
 pub mod engine;
 pub mod store;
 
+pub use background::enforce_background;
 pub use engine::{Decision, Grant, GrantInfo, PermissionEngine, Scope};
 
 use tauri::{AppHandle, State};
