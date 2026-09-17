@@ -4,6 +4,7 @@
 //! 依赖方向：Agent / Workflow → ChatBackend / ToolExecutor / ToolRegistry → PermissionEngine → Capability
 
 pub mod agent;
+pub mod automation;
 pub mod llm;
 pub mod mcp;
 pub mod plugin_tools;
