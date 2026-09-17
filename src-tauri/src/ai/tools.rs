@@ -8,7 +8,7 @@ use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_opener::OpenerExt;
 
-use crate::core::permission::PermissionEngine;
+use crate::core::permission::{enforce_background, PermissionEngine};
 use crate::error::{Result, VoloError};
 
 /// Agent 调工具时在权限引擎中的身份
@@ -16,6 +16,16 @@ pub const AGENT_PRINCIPAL: &str = "agent:builtin";
 
 /// fs_read 返回内容的最大长度（字节），超出截断并标注
 const FS_READ_MAX_BYTES: usize = 4096;
+
+/// 工具执行时的交互模式。
+///
+/// Foreground 保持现有审批弹窗语义；Background 永不发审批事件，
+/// Medium/High/Critical capability 必须已有持久化 Always 授权。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolExecutionMode {
+    Foreground,
+    Background,
+}
 
 /// 工具描述（parameters 为 JSON Schema）
 ///
@@ -162,7 +172,7 @@ impl ToolRegistry {
         Self::execute_as(app, engine, AGENT_PRINCIPAL, name, args).await
     }
 
-    /// 以指定 principal 执行工具。
+    /// 以前台审批语义、指定 principal 执行工具。
     ///
     /// Agent 使用 `agent:builtin`，Workflow 使用 `workflow:<id>`，从而让 Session/Always
     /// 授权彼此隔离；实际 capability、resource 与底层执行逻辑保持完全一致。
@@ -172,6 +182,44 @@ impl ToolRegistry {
         principal: &str,
         name: &str,
         args: &Value,
+    ) -> Result<Value> {
+        Self::execute_as_mode(
+            app,
+            engine,
+            principal,
+            name,
+            args,
+            ToolExecutionMode::Foreground,
+        )
+        .await
+    }
+
+    /// 以后台无交互审批语义、指定 principal 执行工具。
+    pub async fn execute_as_background(
+        app: &AppHandle,
+        engine: &PermissionEngine,
+        principal: &str,
+        name: &str,
+        args: &Value,
+    ) -> Result<Value> {
+        Self::execute_as_mode(
+            app,
+            engine,
+            principal,
+            name,
+            args,
+            ToolExecutionMode::Background,
+        )
+        .await
+    }
+
+    async fn execute_as_mode(
+        app: &AppHandle,
+        engine: &PermissionEngine,
+        principal: &str,
+        name: &str,
+        args: &Value,
+        mode: ToolExecutionMode,
     ) -> Result<Value> {
         let capability = Self::capability_of(name)
             .ok_or_else(|| VoloError::NotFound(format!("tool: {}", name)))?;
@@ -191,7 +239,14 @@ impl ToolRegistry {
         };
         let resource = resource_owned.as_deref();
 
-        engine.enforce(app, principal, capability, resource).await?;
+        match mode {
+            ToolExecutionMode::Foreground => {
+                engine.enforce(app, principal, capability, resource).await?
+            }
+            ToolExecutionMode::Background => {
+                enforce_background(engine, principal, capability, resource)?
+            }
+        }
 
         match name {
             "clipboard_read" => {

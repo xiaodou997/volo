@@ -5,6 +5,7 @@
 
 pub mod agent;
 pub mod automation;
+pub mod background_tools;
 pub mod llm;
 pub mod mcp;
 pub mod plugin_tools;
