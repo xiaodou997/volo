@@ -116,6 +116,19 @@ pub fn save_workflow(dir: &Path, workflow: &Workflow) -> Result<()> {
     write_workflow_file(&path, &content)
 }
 
+/// 按 id 读取单个已保存 Workflow，并重新执行结构校验。
+pub fn load_workflow(dir: &Path, workflow_id: &str) -> Result<Workflow> {
+    let path = workflow_path(dir, workflow_id)?;
+    if !path.is_file() {
+        return Err(VoloError::NotFound(format!("workflow: {}", workflow_id)));
+    }
+
+    let content = fs::read_to_string(path)?;
+    let workflow: Workflow = serde_json::from_str(&content)?;
+    validate_workflow(&workflow)?;
+    Ok(workflow)
+}
+
 /// 列出所有可读取的 Workflow。
 ///
 /// 单个损坏/旧格式文件不会让整个列表不可用；记录 warning 后跳过，方便用户仍能管理其余定义。
@@ -201,20 +214,23 @@ mod tests {
     }
 
     #[test]
-    fn save_list_overwrite_and_delete_round_trip() {
+    fn save_load_list_overwrite_and_delete_round_trip() {
         let dir = test_dir();
         let first = workflow("daily-note", "Daily Note");
         save_workflow(&dir, &first).unwrap();
 
+        assert_eq!(load_workflow(&dir, "daily-note").unwrap(), first);
         let listed = list_workflows(&dir).unwrap();
         assert_eq!(listed, vec![first.clone()]);
 
         let mut updated = first.clone();
         updated.name = "Daily Note Updated".to_string();
         save_workflow(&dir, &updated).unwrap();
+        assert_eq!(load_workflow(&dir, "daily-note").unwrap(), updated);
         assert_eq!(list_workflows(&dir).unwrap(), vec![updated]);
 
         delete_workflow(&dir, "daily-note").unwrap();
+        assert!(load_workflow(&dir, "daily-note").is_err());
         assert!(list_workflows(&dir).unwrap().is_empty());
         fs::remove_dir_all(dir).unwrap();
     }
