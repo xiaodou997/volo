@@ -1,6 +1,7 @@
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, MutexGuard};
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::{DateTime, SecondsFormat, Utc};
@@ -9,9 +10,18 @@ use tauri::{AppHandle, Manager};
 
 use crate::error::{Result, VoloError};
 
-use super::{initial_next_run, validate_automation, WorkflowAutomation};
+use super::{
+    advance_next_run, initial_next_run, is_due, validate_automation, WorkflowAutomation,
+};
 
 const MAX_PERSISTED_AUTOMATION_ID_BYTES: usize = 128;
+static AUTOMATION_STORE_LOCK: Mutex<()> = Mutex::new(());
+
+fn lock_store() -> Result<MutexGuard<'static, ()>> {
+    AUTOMATION_STORE_LOCK
+        .lock()
+        .map_err(|_| VoloError::Other("automation store lock poisoned".to_string()))
+}
 
 /// 后端托管的 Automation 持久化记录。
 ///
@@ -42,6 +52,14 @@ impl AutomationRecord {
             })
             .transpose()
     }
+}
+
+/// Scheduler 成功 claim 的一次到期任务。
+/// `scheduled_for` 记录本次原计划时刻；对应文件中的 nextRunAt 已经在返回前推进。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DueAutomation {
+    pub automation: WorkflowAutomation,
+    pub scheduled_for: DateTime<Utc>,
 }
 
 pub fn automations_dir(app: &AppHandle) -> Result<PathBuf> {
@@ -161,12 +179,38 @@ fn existing_record(dir: &Path, automation_id: &str) -> Result<Option<AutomationR
     read_record(&path).map(Some)
 }
 
+fn list_automations_unlocked(dir: &Path) -> Result<Vec<AutomationRecord>> {
+    if !dir.is_dir() {
+        return Ok(Vec::new());
+    }
+
+    let mut records = Vec::new();
+    for entry in fs::read_dir(dir)? {
+        let Ok(entry) = entry else { continue };
+        let path = entry.path();
+        if path.extension().and_then(|value| value.to_str()) != Some("json") {
+            continue;
+        }
+
+        match read_record(&path) {
+            Ok(record) => records.push(record),
+            Err(error) => {
+                tracing::warn!(path = %path.display(), "skip invalid automation file: {}", error);
+            }
+        }
+    }
+
+    records.sort_by(|a, b| a.automation.id.cmp(&b.automation.id));
+    Ok(records)
+}
+
 /// 保存 renderer 提交的 definition，并由后端决定 `nextRunAt`。
 pub fn save_automation(
     dir: &Path,
     automation: WorkflowAutomation,
     now: DateTime<Utc>,
 ) -> Result<AutomationRecord> {
+    let _guard = lock_store()?;
     validate_automation(&automation)?;
     let existing = existing_record(dir, &automation.id)?;
 
@@ -196,31 +240,12 @@ pub fn save_automation(
 }
 
 pub fn list_automations(dir: &Path) -> Result<Vec<AutomationRecord>> {
-    if !dir.is_dir() {
-        return Ok(Vec::new());
-    }
-
-    let mut records = Vec::new();
-    for entry in fs::read_dir(dir)? {
-        let Ok(entry) = entry else { continue };
-        let path = entry.path();
-        if path.extension().and_then(|value| value.to_str()) != Some("json") {
-            continue;
-        }
-
-        match read_record(&path) {
-            Ok(record) => records.push(record),
-            Err(error) => {
-                tracing::warn!(path = %path.display(), "skip invalid automation file: {}", error);
-            }
-        }
-    }
-
-    records.sort_by(|a, b| a.automation.id.cmp(&b.automation.id));
-    Ok(records)
+    let _guard = lock_store()?;
+    list_automations_unlocked(dir)
 }
 
 pub fn delete_automation(dir: &Path, automation_id: &str) -> Result<()> {
+    let _guard = lock_store()?;
     let path = automation_path(dir, automation_id)?;
     if !path.is_file() {
         return Err(VoloError::NotFound(format!(
@@ -238,11 +263,50 @@ pub fn update_next_run(
     automation_id: &str,
     next_run_at: Option<DateTime<Utc>>,
 ) -> Result<AutomationRecord> {
+    let _guard = lock_store()?;
     let mut record = existing_record(dir, automation_id)?
         .ok_or_else(|| VoloError::NotFound(format!("automation: {}", automation_id)))?;
     record.next_run_at = next_run_at.map(format_time);
     write_record(dir, &record)?;
     Ok(record)
+}
+
+/// 原子 claim 当前到期的 enabled Automations：
+/// - 在同一把存储锁内重新读取最新 definition；
+/// - 对每个 due record 先推进并持久化 nextRunAt，再返回执行 claim；
+/// - enabled 但缺失 nextRunAt 的旧/异常记录只修复下一次时间，本轮不立即执行；
+/// - 锁在真正执行 Workflow 前释放，避免长任务阻塞 UI 的 save/delete。
+pub fn claim_due_automations(dir: &Path, now: DateTime<Utc>) -> Result<Vec<DueAutomation>> {
+    let _guard = lock_store()?;
+    let records = list_automations_unlocked(dir)?;
+    let mut claimed = Vec::new();
+
+    for mut record in records {
+        if !record.automation.enabled {
+            continue;
+        }
+
+        let Some(scheduled_for) = record.parsed_next_run()? else {
+            let repaired = initial_next_run(&record.automation.trigger, now)?;
+            record.next_run_at = Some(format_time(repaired));
+            write_record(dir, &record)?;
+            continue;
+        };
+
+        if !is_due(scheduled_for, now) {
+            continue;
+        }
+
+        let next_run = advance_next_run(&record.automation.trigger, scheduled_for, now)?;
+        record.next_run_at = Some(format_time(next_run));
+        write_record(dir, &record)?;
+        claimed.push(DueAutomation {
+            automation: record.automation,
+            scheduled_for,
+        });
+    }
+
+    Ok(claimed)
 }
 
 #[cfg(test)]
@@ -338,6 +402,50 @@ mod tests {
         let updated = update_next_run(&dir, "job-1", Some(at(13, 0))).unwrap();
         assert_eq!(updated.automation, definition);
         assert_eq!(updated.parsed_next_run().unwrap(), Some(at(13, 0)));
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn claim_due_advances_before_return_and_does_not_claim_twice() {
+        let dir = test_dir();
+        save_automation(&dir, automation("job-1", 15, true), at(12, 0)).unwrap();
+
+        let claimed = claim_due_automations(&dir, at(12, 15)).unwrap();
+        assert_eq!(claimed.len(), 1);
+        assert_eq!(claimed[0].automation.id, "job-1");
+        assert_eq!(claimed[0].scheduled_for, at(12, 15));
+        assert_eq!(
+            list_automations(&dir).unwrap()[0]
+                .parsed_next_run()
+                .unwrap(),
+            Some(at(12, 30))
+        );
+        assert!(claim_due_automations(&dir, at(12, 15)).unwrap().is_empty());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn claim_due_skips_missed_occurrences() {
+        let dir = test_dir();
+        save_automation(&dir, automation("job-1", 15, true), at(12, 0)).unwrap();
+
+        let claimed = claim_due_automations(&dir, at(12, 47)).unwrap();
+        assert_eq!(claimed.len(), 1);
+        assert_eq!(claimed[0].scheduled_for, at(12, 15));
+        assert_eq!(
+            list_automations(&dir).unwrap()[0]
+                .parsed_next_run()
+                .unwrap(),
+            Some(at(13, 0))
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn disabled_automation_is_never_claimed() {
+        let dir = test_dir();
+        save_automation(&dir, automation("job-1", 15, false), at(12, 0)).unwrap();
+        assert!(claim_due_automations(&dir, at(13, 0)).unwrap().is_empty());
         fs::remove_dir_all(dir).unwrap();
     }
 
