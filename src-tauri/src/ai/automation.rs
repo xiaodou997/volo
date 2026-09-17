@@ -2,9 +2,10 @@
 //!
 //! Automation 与 Workflow 分层：Workflow 描述“做什么”，Automation 描述“什么时候运行”。
 //! 第一版只支持 interval trigger，刻意不引入 daily/cron，避免时区与 DST 语义在 MVP 阶段失控。
-//! 核心时间计算保持纯函数；definition/runtime state 的持久化由子模块负责，后台 runner 后续单独接入。
+//! 核心时间计算保持纯函数；definition/runtime state 的持久化与后台 scheduler 分模块实现。
 
 pub(crate) mod commands;
+pub(crate) mod scheduler;
 mod storage;
 pub use storage::AutomationRecord;
 
