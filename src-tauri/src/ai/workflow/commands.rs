@@ -20,9 +20,9 @@ use super::{
 };
 
 #[path = "history.rs"]
-mod history;
+pub(crate) mod history;
 #[path = "storage.rs"]
-mod storage;
+pub(crate) mod storage;
 
 /// Workflow 在 PermissionEngine 中使用独立 principal，避免复用 Agent 的持久授权。
 pub(crate) fn workflow_principal(workflow_id: &str) -> String {
