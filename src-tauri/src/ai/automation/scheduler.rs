@@ -4,14 +4,16 @@
 //! - 每 15 秒检查一次 due Automations；
 //! - storage 在 claim 时先推进 nextRunAt，避免同一 occurrence 重复执行；
 //! - missed occurrences 不补跑；
-//! - due jobs 逐个执行，保持简单可预测；
+//! - 同一 tick 内最多并发执行 4 个 due jobs；tick 会等待本批次完成，因此不会跨 tick 重叠；
 //! - 未配置 retryPolicy 时保持原行为；配置后按固定 backoff 重试，且 retry 不跨过下一次正常 schedule；
 //! - 缺失 Workflow 不会阻断 scheduler，下一周期仍会继续尝试。
 
+use std::future::Future;
 use std::path::Path;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
+use futures_util::stream::{self, StreamExt};
 use tauri::AppHandle;
 
 use crate::ai::workflow::commands::{load_saved_workflow, run_workflow_background};
@@ -23,12 +25,24 @@ use super::storage::{
 };
 
 const SCHEDULER_TICK: Duration = Duration::from_secs(15);
+const MAX_CONCURRENT_AUTOMATIONS: usize = 4;
+
+async fn run_bounded<T, F, Fut>(items: Vec<T>, limit: usize, f: F)
+where
+    F: FnMut(T) -> Fut,
+    Fut: Future<Output = ()>,
+{
+    stream::iter(items)
+        .for_each_concurrent(Some(limit), f)
+        .await;
+}
 
 /// 在 Tauri runtime 上启动单个 scheduler loop。
 pub(crate) fn start(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
         tracing::info!(
             tick_seconds = SCHEDULER_TICK.as_secs(),
+            max_concurrent = MAX_CONCURRENT_AUTOMATIONS,
             "Automation scheduler started"
         );
 
@@ -48,9 +62,12 @@ pub(crate) async fn tick(app: &AppHandle, now: DateTime<Utc>) -> Result<usize> {
     let claimed = claim_due_automations(&dir, now)?;
     let claimed_count = claimed.len();
 
-    for claim in claimed {
-        execute_claim(app, &dir, claim).await;
-    }
+    // 本批次有界并发，但 tick 本身会等待全部完成。这样可以并行处理不同 Automation，
+    // 同时保持“不会在下一 tick 再次启动同一 Automation”的简单无重叠语义。
+    run_bounded(claimed, MAX_CONCURRENT_AUTOMATIONS, |claim| {
+        execute_claim(app, &dir, claim)
+    })
+    .await;
 
     Ok(claimed_count)
 }
@@ -131,7 +148,6 @@ async fn execute_claim(app: &AppHandle, dir: &Path, claim: DueAutomation) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::future::Future;
     use std::fs;
     use std::path::PathBuf;
     use std::pin::Pin;
@@ -185,6 +201,36 @@ mod tests {
     #[test]
     fn scheduler_tick_is_shorter_than_minimum_user_interval() {
         assert!(SCHEDULER_TICK < Duration::from_secs(60));
+    }
+
+    #[tokio::test]
+    async fn bounded_runner_executes_in_parallel_without_exceeding_limit() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        let current = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+
+        run_bounded((0..8).collect(), 3, {
+            let current = Arc::clone(&current);
+            let peak = Arc::clone(&peak);
+            move |_| {
+                let current = Arc::clone(&current);
+                let peak = Arc::clone(&peak);
+                async move {
+                    let active = current.fetch_add(1, Ordering::SeqCst) + 1;
+                    peak.fetch_max(active, Ordering::SeqCst);
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                    current.fetch_sub(1, Ordering::SeqCst);
+                }
+            }
+        })
+        .await;
+
+        let peak = peak.load(Ordering::SeqCst);
+        assert!(peak > 1, "expected actual parallel progress");
+        assert!(peak <= 3, "bounded runner exceeded concurrency limit");
+        assert_eq!(current.load(Ordering::SeqCst), 0);
     }
 
     #[tokio::test]
