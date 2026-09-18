@@ -42,6 +42,7 @@ pinyin = "0.10"
 notify = "6"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
 futures-util = "0.3"
+rquickjs = { version = "0.13", features = ["futures"] }
 
 # 平台特定依赖
 [target.'cfg(target_os = "macos")'.dependencies]
