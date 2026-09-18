@@ -12,7 +12,7 @@ on:
   pull_request:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   check:
@@ -61,23 +61,3 @@ jobs:
       - name: Rust tests
         working-directory: src-tauri
         run: cargo test --all-features
-
-      # Temporary dependency-lock capture for feature branches that add Rust crates.
-      # Removed before merge after the generated lockfile is committed.
-      - name: Upload generated Cargo.lock
-        if: always()
-        uses: actions/upload-artifact@v6
-        with:
-          name: cargo-lock-${{ github.sha }}
-          path: src-tauri/Cargo.lock
-
-      - name: Commit generated Cargo.lock
-        if: github.event_name == 'push' && github.ref == 'refs/heads/feat/plugin-headless-runtime'
-        run: |
-          if ! git diff --quiet -- src-tauri/Cargo.lock; then
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add src-tauri/Cargo.lock
-            git commit -m "chore(deps): update Cargo.lock for QuickJS"
-            git push
-          fi
