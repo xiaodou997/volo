@@ -241,20 +241,30 @@ pub fn save_automation(
     validate_automation(&automation)?;
     let existing = existing_record(dir, &automation.id)?;
 
-    let preserve = automation.enabled
+    let preserve_schedule = automation.enabled
         && existing.as_ref().is_some_and(|record| {
             record.automation.enabled
                 && record.automation.workflow_id == automation.workflow_id
                 && record.automation.trigger == automation.trigger
-                && record.automation.retry_policy == automation.retry_policy
                 && record.next_run_at.is_some()
+        });
+    let preserve_retry_state = preserve_schedule
+        && existing.as_ref().is_some_and(|record| {
+            record.automation.retry_policy == automation.retry_policy
         });
 
     let (next_run_at, retry_state) = if !automation.enabled {
         (None, None)
-    } else if preserve {
-        let existing = existing.expect("preserve requires existing record");
-        (existing.next_run_at, existing.retry_state)
+    } else if preserve_schedule {
+        let existing = existing.expect("preserve_schedule requires existing record");
+        (
+            existing.next_run_at,
+            if preserve_retry_state {
+                existing.retry_state
+            } else {
+                None
+            },
+        )
     } else {
         (
             Some(format_time(initial_next_run(&automation.trigger, now)?)),
@@ -490,6 +500,28 @@ mod tests {
 
         let second = save_automation(&dir, definition, at(12, 5)).unwrap();
         assert_eq!(second.parsed_next_run().unwrap(), Some(at(12, 15)));
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn changing_only_retry_policy_preserves_schedule_and_clears_pending_retry() {
+        let dir = test_dir();
+        let definition = retry_automation("job-1", 15, 2, 1);
+        save_automation(&dir, definition.clone(), at(12, 0)).unwrap();
+        let claim = claim_due_automations(&dir, at(12, 15)).unwrap();
+        schedule_retry_after_failure(&dir, &claim[0], at(12, 15))
+            .unwrap()
+            .unwrap();
+
+        let mut changed = definition;
+        changed.retry_policy = Some(AutomationRetryPolicy {
+            max_retries: 3,
+            backoff_minutes: 2,
+        });
+        let saved = save_automation(&dir, changed, at(12, 16)).unwrap();
+        assert_eq!(saved.parsed_next_run().unwrap(), Some(at(12, 30)));
+        assert!(saved.retry_state.is_none());
+
         fs::remove_dir_all(dir).unwrap();
     }
 
