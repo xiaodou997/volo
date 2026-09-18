@@ -11,6 +11,7 @@ pub use engine::{Decision, Grant, GrantInfo, PermissionEngine, Scope};
 
 use tauri::{AppHandle, State};
 
+use crate::core::capability::{capability_meta, RiskLevel};
 use crate::error::{Result, VoloError};
 use crate::plugin::manager::PluginState;
 
@@ -70,6 +71,53 @@ pub fn permission_respond(
 #[tauri::command]
 pub fn permission_list_grants(engine: State<'_, PermissionEngine>) -> Result<Vec<GrantInfo>> {
     engine.list_grants()
+}
+
+/// 为后台 Workflow 主动发起一次标准权限审批。
+///
+/// 这个命令不会直接写授权表，也不会绕过现有审批 UI：Medium / High / Critical
+/// 仍通过 PermissionEngine::enforce 发出 permission-request。审批完成后再用
+/// enforce_background 校验结果，只有用户选择 Always 才算真正满足后台执行要求。
+#[tauri::command]
+pub async fn permission_request_workflow_always(
+    app: AppHandle,
+    engine: State<'_, PermissionEngine>,
+    workflow_id: String,
+    capability: String,
+    resource: Option<String>,
+) -> Result<()> {
+    let workflow_id = workflow_id.trim();
+    if workflow_id.is_empty() {
+        return Err(VoloError::Other("workflow_id cannot be empty".to_string()));
+    }
+
+    let capability = capability.trim();
+    if capability.is_empty() {
+        return Err(VoloError::Other("capability cannot be empty".to_string()));
+    }
+
+    let meta = capability_meta(capability);
+    if meta.id == "unknown" {
+        return Err(VoloError::Other(format!(
+            "Unknown capability '{}' cannot be pre-granted for background execution",
+            capability
+        )));
+    }
+    if meta.risk == RiskLevel::Low {
+        return Err(VoloError::Other(format!(
+            "Low-risk capability '{}' does not require a background Always grant",
+            capability
+        )));
+    }
+
+    let principal = format!("workflow:{}", workflow_id);
+    engine
+        .enforce(&app, &principal, capability, resource.as_deref())
+        .await?;
+
+    // Session / Once 可以放行前台审批本身，但不能成为无人值守授权。
+    // 再走一次后台裁决，确保 UI 最终只把 Always 视为成功。
+    enforce_background(&engine, &principal, capability, resource.as_deref())
 }
 
 /// 撤销授权。resource 为空时撤销该 capability 的全部资源授权，以兼容旧前端。

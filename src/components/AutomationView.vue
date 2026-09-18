@@ -2,6 +2,7 @@
 import { onMounted, shallowRef } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 import AutomationPanel from './AutomationPanel.vue';
+import WorkflowPermissionPanel from './WorkflowPermissionPanel.vue';
 import { toWorkflowOptions, type WorkflowDefinition, type WorkflowOption } from '../workflow/model';
 
 defineEmits<{ back: [] }>();
@@ -33,6 +34,7 @@ onMounted(() => {
       </div>
     </header>
 
+    <WorkflowPermissionPanel :workflows="workflows" />
     <AutomationPanel :workflows="workflows" />
   </div>
 </template>
