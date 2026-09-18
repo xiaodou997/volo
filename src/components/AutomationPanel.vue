@@ -2,9 +2,11 @@
 import { computed, onMounted, ref, shallowRef, watch } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 import {
+  automationRetryLabel,
   automationTriggerLabel,
   buildDailyAutomation,
   buildIntervalAutomation,
+  buildRetryPolicy,
   formatAutomationNextRun,
   formatDailyTime,
   parseDailyTime,
@@ -23,6 +25,9 @@ const workflowId = ref('');
 const triggerType = ref<'interval' | 'daily'>('interval');
 const everyMinutes = ref(15);
 const dailyTime = ref('09:00');
+const retryEnabled = ref(false);
+const maxRetries = ref(2);
+const backoffMinutes = ref(1);
 const enabled = ref(true);
 const busy = ref(false);
 const status = ref('');
@@ -74,6 +79,9 @@ function loadSelectedAutomation() {
   } else {
     dailyTime.value = formatDailyTime(record.trigger.hour, record.trigger.minute);
   }
+  retryEnabled.value = !!record.retryPolicy;
+  maxRetries.value = record.retryPolicy?.maxRetries ?? 2;
+  backoffMinutes.value = record.retryPolicy?.backoffMinutes ?? 1;
   enabled.value = record.enabled;
   error.value = '';
   status.value = `已加载 ${record.id}`;
@@ -86,6 +94,9 @@ function newAutomation() {
   triggerType.value = 'interval';
   everyMinutes.value = 15;
   dailyTime.value = '09:00';
+  retryEnabled.value = false;
+  maxRetries.value = 2;
+  backoffMinutes.value = 1;
   enabled.value = true;
   status.value = '';
   error.value = '';
@@ -97,6 +108,9 @@ async function saveAutomation() {
   status.value = '';
   error.value = '';
   try {
+    const retryPolicy = retryEnabled.value
+      ? buildRetryPolicy(Number(maxRetries.value), Number(backoffMinutes.value))
+      : undefined;
     const automation = triggerType.value === 'daily'
       ? (() => {
           const { hour, minute } = parseDailyTime(dailyTime.value);
@@ -106,6 +120,7 @@ async function saveAutomation() {
             hour,
             minute,
             enabled.value,
+            retryPolicy,
           );
         })()
       : buildIntervalAutomation(
@@ -113,6 +128,7 @@ async function saveAutomation() {
           workflowId.value,
           Number(everyMinutes.value),
           enabled.value,
+          retryPolicy,
         );
     const previousId = selectedAutomationId.value;
     busy.value = true;
@@ -266,6 +282,46 @@ onMounted(() => {
         <span class="field-hint">使用当前系统本地时区；nextRunAt 仍以 UTC 持久化。</span>
       </label>
 
+      <div class="retry-block">
+        <label class="enabled-row retry-toggle">
+          <input v-model="retryEnabled" type="checkbox" :disabled="busy" />
+          <div>
+            <strong>失败后自动重试</strong>
+            <span>仅对当前 occurrence 重试；不会跨过下一次正常调度时间。</span>
+          </div>
+        </label>
+
+        <div v-if="retryEnabled" class="retry-config">
+          <label class="field-block">
+            <span>最大重试次数</span>
+            <input
+              v-model.number="maxRetries"
+              class="field-control compact-number"
+              type="number"
+              min="1"
+              max="10"
+              step="1"
+              :disabled="busy"
+            />
+          </label>
+          <label class="field-block">
+            <span>重试间隔</span>
+            <div class="interval-row">
+              <input
+                v-model.number="backoffMinutes"
+                class="field-control compact-number"
+                type="number"
+                min="1"
+                max="1440"
+                step="1"
+                :disabled="busy"
+              />
+              <span>分钟</span>
+            </div>
+          </label>
+        </div>
+      </div>
+
       <label class="enabled-row">
         <input v-model="enabled" type="checkbox" :disabled="busy" />
         <div>
@@ -314,6 +370,10 @@ onMounted(() => {
             <dt>Next run</dt>
             <dd>{{ selectedRecord.enabled ? formatAutomationNextRun(selectedRecord.nextRunAt) : '已停用' }}</dd>
           </div>
+          <div>
+            <dt>Retry</dt>
+            <dd>{{ automationRetryLabel(selectedRecord) }}</dd>
+          </div>
         </dl>
       </article>
 
@@ -329,7 +389,8 @@ onMounted(() => {
           <li>Medium / High / Critical 能力必须提前授予 Workflow <code>Always</code> 权限。</li>
           <li>内置 Tool、MCP Tool、AI Step 可后台执行。</li>
           <li>Plugin Tool 目前依赖 renderer，后台任务会明确拒绝，不会等待前端回传。</li>
-          <li>执行失败不会立即重试，结果会写入 Workflow「最近运行」。</li>
+          <li>未配置 Retry 时失败不会重试；启用后按固定间隔重试，且不会跨过下一次正常调度。</li>
+          <li>每次执行结果仍会写入 Workflow「最近运行」，便于审计失败与重试过程。</li>
         </ul>
       </div>
 
@@ -461,6 +522,29 @@ onMounted(() => {
 .interval-row > span {
   color: var(--text-tertiary);
   font-size: 11px;
+}
+
+.retry-block {
+  margin-top: 14px;
+}
+
+.retry-block .enabled-row {
+  margin-top: 0;
+}
+
+.retry-config {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.retry-config .field-block {
+  margin-top: 0;
+}
+
+.compact-number {
+  width: 110px;
 }
 
 .enabled-row {
