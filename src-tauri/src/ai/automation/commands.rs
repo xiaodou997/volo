@@ -19,16 +19,10 @@ fn normalize_background_resource(
     if capability == "fs.read" {
         let path = resource.as_deref().ok_or_else(|| {
             VoloError::Other(
-                "Background fs.read grant requires an existing file resource".to_string(),
+                "Background fs.read grant requires an exact filesystem resource".to_string(),
             )
         })?;
-        let resolved = crate::api::fs::canonicalize_existing_plugin_path(path)?;
-        if !resolved.is_file() {
-            return Err(VoloError::Other(format!(
-                "Background fs.read grant requires a file resource: {}",
-                resolved.display()
-            )));
-        }
+        let resolved = crate::api::fs::canonicalize_creation_plugin_path(path)?;
         return Ok(Some(resolved.to_string_lossy().into_owned()));
     }
 
@@ -110,7 +104,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn background_fs_read_requires_an_existing_resource_and_canonicalizes_it() {
+    fn background_fs_read_requires_a_resource_and_canonicalizes_it() {
         assert!(normalize_background_resource("fs.read", None).is_err());
 
         let dir = std::env::temp_dir().join(format!(
@@ -132,11 +126,28 @@ mod tests {
             std::fs::canonicalize(&file).unwrap()
         );
 
-        assert!(normalize_background_resource(
+        let normalized_dir = normalize_background_resource(
             "fs.read",
             Some(dir.to_string_lossy().into_owned()),
         )
-        .is_err());
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            std::path::PathBuf::from(normalized_dir),
+            std::fs::canonicalize(&dir).unwrap()
+        );
+
+        let missing = dir.join("future.txt");
+        let normalized_missing = normalize_background_resource(
+            "fs.read",
+            Some(missing.to_string_lossy().into_owned()),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            std::path::PathBuf::from(normalized_missing),
+            std::fs::canonicalize(&dir).unwrap().join("future.txt")
+        );
 
         let _ = std::fs::remove_dir_all(dir);
     }

@@ -4,15 +4,16 @@
 //! plugin Tool JavaScript in an embedded QuickJS runtime with no DOM, network, filesystem or
 //! other host APIs exposed by default.
 //!
-//! v5 keeps pure-compute Tool support and the low-risk host surface, and adds non-interactive
-//! clipboard.readText, screenCapture, and fs.read as Medium-risk headless APIs. Every host call
-//! must be declared by the plugin manifest
+//! v6 keeps pure-compute Tool support and the low-risk host surface, and adds non-interactive
+//! clipboard.readText, screenCapture, plus fs.read/readBinary/exists/list as Medium-risk headless
+//! APIs. Every host call must be declared by the plugin manifest
 //! and is evaluated with the Workflow principal through the same non-interactive background
 //! permission path used by BackgroundToolExecutor. Medium/high-risk APIs require a Workflow-scoped
 //! Always grant before unattended execution; unsupported host APIs still fail fast.
 
 use std::time::{Duration, Instant};
 
+use base64::Engine;
 use rquickjs::{Context, Function, Promise, Runtime};
 use serde_json::{json, Value};
 use tauri::{AppHandle, Manager};
@@ -147,13 +148,19 @@ const HEADLESS_SHIM: &str = r#"
       read: function (path) {
         return call("fs.read", { path: path });
       },
-      readBinary: unsupported("fs.readBinary"),
+      readBinary: function (path) {
+        return call("fs.readBinary", { path: path });
+      },
       write: unsupported("fs.write"),
       writeBinary: unsupported("fs.writeBinary"),
-      exists: unsupported("fs.exists"),
+      exists: function (path) {
+        return call("fs.exists", { path: path });
+      },
       mkdir: unsupported("fs.mkdir"),
       remove: unsupported("fs.remove"),
-      list: unsupported("fs.list"),
+      list: function (path) {
+        return call("fs.list", { path: path });
+      },
       pickFile: unsupported("fs.pickFile"),
       pickFiles: unsupported("fs.pickFiles"),
       pickFolder: unsupported("fs.pickFolder")
@@ -294,6 +301,69 @@ impl HeadlessPluginHost {
                             error
                         ))
                     })
+            }
+            "fs.readBinary" => {
+                let path = Self::string_arg(&args, "path", method)?;
+                let resolved = crate::api::fs::canonicalize_existing_plugin_path(path)?;
+                let resource = resolved.to_string_lossy();
+                self.authorize_resource("fs.read", Some(resource.as_ref()))?;
+                let bytes = std::fs::read(&resolved).map_err(|error| {
+                    VoloError::Other(format!(
+                        "Failed to read headless plugin binary file '{}': {}",
+                        resolved.display(),
+                        error
+                    ))
+                })?;
+                Ok(Value::String(
+                    base64::engine::general_purpose::STANDARD.encode(bytes),
+                ))
+            }
+            "fs.exists" => {
+                let path = Self::string_arg(&args, "path", method)?;
+                let resolved = crate::api::fs::canonicalize_creation_plugin_path(path)?;
+                let resource = resolved.to_string_lossy();
+                self.authorize_resource("fs.read", Some(resource.as_ref()))?;
+                Ok(Value::Bool(resolved.exists()))
+            }
+            "fs.list" => {
+                let path = Self::string_arg(&args, "path", method)?;
+                let resolved = crate::api::fs::canonicalize_existing_plugin_path(path)?;
+                let resource = resolved.to_string_lossy();
+                self.authorize_resource("fs.read", Some(resource.as_ref()))?;
+
+                let mut items = Vec::new();
+                for entry in std::fs::read_dir(&resolved).map_err(|error| {
+                    VoloError::Other(format!(
+                        "Failed to list headless plugin directory '{}': {}",
+                        resolved.display(),
+                        error
+                    ))
+                })? {
+                    let entry = entry.map_err(VoloError::from)?;
+                    let path = entry.path();
+                    let metadata = entry.metadata().ok();
+                    let file_type = metadata
+                        .as_ref()
+                        .map(|meta| if meta.is_dir() { "directory" } else { "file" })
+                        .unwrap_or("unknown");
+                    let size = metadata
+                        .as_ref()
+                        .and_then(|meta| meta.is_file().then_some(meta.len()));
+                    let modified = metadata.as_ref().and_then(|meta| {
+                        meta.modified().ok().map(|time| {
+                            let datetime: chrono::DateTime<chrono::Utc> = time.into();
+                            datetime.to_rfc3339()
+                        })
+                    });
+                    items.push(json!({
+                        "path": path.to_string_lossy(),
+                        "name": entry.file_name().to_string_lossy(),
+                        "type": file_type,
+                        "size": size,
+                        "modified": modified,
+                    }));
+                }
+                Ok(Value::Array(items))
             }
             "clipboard.writeText" => {
                 self.authorize("clipboard.write")?;
@@ -644,6 +714,24 @@ mod tests {
         assert!(error
             .to_string()
             .contains("headless plugin host API is unavailable in pure runtime: fs.read"));
+    }
+
+    #[tokio::test]
+    async fn pure_runtime_does_not_enable_extended_fs_reads_without_an_authorized_host() {
+        for expression in [
+            "rubick.fs.readBinary('/tmp/input.bin')",
+            "rubick.fs.exists('/tmp/input.txt')",
+            "rubick.fs.list('/tmp')",
+        ] {
+            let source = format!(
+                "rubick.tool.onInvoke(async function () {{ return await {}; }});",
+                expression
+            );
+            let error = execute_source(&source, json!({})).await.unwrap_err();
+            assert!(error
+                .to_string()
+                .contains("headless plugin host API is unavailable in pure runtime: fs."));
+        }
     }
 
     #[tokio::test]
