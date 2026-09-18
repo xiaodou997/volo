@@ -2,9 +2,12 @@
 import { computed, onMounted, ref, shallowRef, watch } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 import {
-  automationIntervalLabel,
+  automationTriggerLabel,
+  buildDailyAutomation,
   buildIntervalAutomation,
   formatAutomationNextRun,
+  formatDailyTime,
+  parseDailyTime,
   type AutomationRecord,
 } from '../automation/model';
 import type { WorkflowOption } from '../workflow/model';
@@ -17,7 +20,9 @@ const records = shallowRef<AutomationRecord[]>([]);
 const selectedAutomationId = ref('');
 const id = ref('');
 const workflowId = ref('');
+const triggerType = ref<'interval' | 'daily'>('interval');
 const everyMinutes = ref(15);
+const dailyTime = ref('09:00');
 const enabled = ref(true);
 const busy = ref(false);
 const status = ref('');
@@ -63,7 +68,12 @@ function loadSelectedAutomation() {
 
   id.value = record.id;
   workflowId.value = record.workflowId;
-  everyMinutes.value = record.trigger.everyMinutes;
+  triggerType.value = record.trigger.type;
+  if (record.trigger.type === 'interval') {
+    everyMinutes.value = record.trigger.everyMinutes;
+  } else {
+    dailyTime.value = formatDailyTime(record.trigger.hour, record.trigger.minute);
+  }
   enabled.value = record.enabled;
   error.value = '';
   status.value = `已加载 ${record.id}`;
@@ -73,7 +83,9 @@ function newAutomation() {
   selectedAutomationId.value = '';
   id.value = '';
   workflowId.value = props.workflows[0]?.id ?? '';
+  triggerType.value = 'interval';
   everyMinutes.value = 15;
+  dailyTime.value = '09:00';
   enabled.value = true;
   status.value = '';
   error.value = '';
@@ -85,12 +97,23 @@ async function saveAutomation() {
   status.value = '';
   error.value = '';
   try {
-    const automation = buildIntervalAutomation(
-      id.value,
-      workflowId.value,
-      Number(everyMinutes.value),
-      enabled.value,
-    );
+    const automation = triggerType.value === 'daily'
+      ? (() => {
+          const { hour, minute } = parseDailyTime(dailyTime.value);
+          return buildDailyAutomation(
+            id.value,
+            workflowId.value,
+            hour,
+            minute,
+            enabled.value,
+          );
+        })()
+      : buildIntervalAutomation(
+          id.value,
+          workflowId.value,
+          Number(everyMinutes.value),
+          enabled.value,
+        );
     const previousId = selectedAutomationId.value;
     busy.value = true;
     const saved = await invoke<AutomationRecord>('automation_save', { automation });
@@ -163,7 +186,7 @@ onMounted(() => {
       <div class="panel-title">
         <div>
           <strong>Automation</strong>
-          <span>Interval scheduler</span>
+          <span>Interval / Daily scheduler</span>
         </div>
         <button class="ghost-btn" :disabled="busy" @click="manualRefresh">刷新</button>
       </div>
@@ -209,6 +232,14 @@ onMounted(() => {
       </label>
 
       <label class="field-block">
+        <span>调度方式</span>
+        <select v-model="triggerType" class="field-control" :disabled="busy">
+          <option value="interval">固定间隔</option>
+          <option value="daily">每天固定时间</option>
+        </select>
+      </label>
+
+      <label v-if="triggerType === 'interval'" class="field-block">
         <span>运行间隔</span>
         <div class="interval-row">
           <input
@@ -224,11 +255,22 @@ onMounted(() => {
         </div>
       </label>
 
+      <label v-else class="field-block">
+        <span>每天运行时间</span>
+        <input
+          v-model="dailyTime"
+          class="field-control daily-time"
+          type="time"
+          :disabled="busy"
+        />
+        <span class="field-hint">使用当前系统本地时区；nextRunAt 仍以 UTC 持久化。</span>
+      </label>
+
       <label class="enabled-row">
         <input v-model="enabled" type="checkbox" :disabled="busy" />
         <div>
           <strong>启用后台运行</strong>
-          <span>停用后 nextRunAt 会被清空；再次启用会从保存时刻重新计时。</span>
+          <span>停用后 nextRunAt 会被清空；再次启用会从保存时刻重新计算下一次运行。</span>
         </div>
       </label>
 
@@ -266,7 +308,7 @@ onMounted(() => {
           </div>
           <div>
             <dt>Cadence</dt>
-            <dd>{{ automationIntervalLabel(selectedRecord) }}</dd>
+            <dd>{{ automationTriggerLabel(selectedRecord) }}</dd>
           </div>
           <div>
             <dt>Next run</dt>
@@ -282,7 +324,8 @@ onMounted(() => {
       <div class="policy-card">
         <strong>后台执行规则</strong>
         <ul>
-          <li>错过的 interval 不补跑，只执行恢复后的一个到期周期。</li>
+          <li>错过的 interval / daily 周期不补跑，只执行恢复后的一个到期周期。</li>
+          <li>Daily 使用当前系统本地时区；遇到 DST 跳时会顺延到第一个有效分钟。</li>
           <li>Medium / High / Critical 能力必须提前授予 Workflow <code>Always</code> 权限。</li>
           <li>内置 Tool、MCP Tool、AI Step 可后台执行。</li>
           <li>Plugin Tool 目前依赖 renderer，后台任务会明确拒绝，不会等待前端回传。</li>
@@ -300,7 +343,7 @@ onMounted(() => {
         >
           <div class="automation-card-heading">
             <strong>{{ record.id }}</strong>
-            <span>{{ automationIntervalLabel(record) }}</span>
+            <span>{{ automationTriggerLabel(record) }}</span>
           </div>
           <div class="automation-card-meta">
             <span>{{ record.workflowId }}</span>
@@ -386,6 +429,14 @@ onMounted(() => {
   font-weight: 600;
 }
 
+.field-block > .field-hint {
+  margin-top: 5px;
+  margin-bottom: 0;
+  color: var(--text-tertiary);
+  font-weight: 400;
+  line-height: 1.4;
+}
+
 .field-control {
   width: 100%;
   height: 32px;
@@ -402,7 +453,8 @@ onMounted(() => {
   border-color: var(--accent-color);
 }
 
-.interval-row .field-control {
+.interval-row .field-control,
+.daily-time {
   width: 110px;
 }
 

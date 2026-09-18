@@ -29,7 +29,7 @@ onMounted(() => {
       </button>
       <div class="header-copy">
         <h2>Automation</h2>
-        <span>Interval · Background · Skip missed runs</span>
+        <span>Interval / Daily · Background · Skip missed runs</span>
       </div>
     </header>
 
