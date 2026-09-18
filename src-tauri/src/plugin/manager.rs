@@ -80,6 +80,16 @@ fn default_run_mode() -> String {
 ///
 /// parameters 是工具的入参 JSON Schema（透传给 LLM），必须是 object 类型；
 /// manifest 缺省时补默认空 object schema，加载时校验（见 load_plugin_from_dir）
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolRuntime {
+    /// Existing renderer iframe runtime. This stays the compatibility default.
+    #[default]
+    Renderer,
+    /// Native headless JS runtime. Opt-in only.
+    Headless,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolManifestSpec {
     pub id: String,
@@ -91,6 +101,8 @@ pub struct ToolManifestSpec {
     pub run: String,
     #[serde(default)]
     pub icon: Option<String>,
+    #[serde(default)]
+    pub runtime: ToolRuntime,
 }
 
 /// 工具入参的默认 JSON Schema：空 object
@@ -845,6 +857,36 @@ mod tests {
         assert!(tool.parameters["properties"]["count"].is_object());
         assert_eq!(tool.run, "tool.js");
         assert_eq!(tool.icon.as_deref(), Some("icon.png"));
+        assert_eq!(tool.runtime, ToolRuntime::Renderer);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_headless_tool_runtime_is_explicit_opt_in() {
+        let dir = temp_plugin_dir("headless_tool_runtime");
+        std::fs::write(
+            dir.join("plugin.json"),
+            r#"{
+                "id": "headless-plugin",
+                "name": "Headless Plugin",
+                "version": "1.0.0",
+                "contributes": {
+                    "tools": [
+                        {
+                            "id": "pure",
+                            "name": "Pure JS",
+                            "run": "tool.js",
+                            "runtime": "headless"
+                        }
+                    ]
+                }
+            }"#,
+        )
+        .unwrap();
+
+        let plugin = load_plugin_from_dir(&dir).unwrap();
+        assert_eq!(plugin.contributes.tools[0].runtime, ToolRuntime::Headless);
 
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -876,6 +918,7 @@ mod tests {
         );
         assert!(tool.description.is_none());
         assert!(tool.icon.is_none());
+        assert_eq!(tool.runtime, ToolRuntime::Renderer);
 
         std::fs::remove_dir_all(&dir).ok();
     }
