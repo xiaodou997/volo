@@ -270,7 +270,7 @@ onMounted(() => {
         <input v-model="enabled" type="checkbox" :disabled="busy" />
         <div>
           <strong>启用后台运行</strong>
-          <span>停用后 nextRunAt 会被清空；再次启用会从保存时刻重新计时。</span>
+          <span>停用后 nextRunAt 会被清空；再次启用会从保存时刻重新计算下一次运行。</span>
         </div>
       </label>
 
