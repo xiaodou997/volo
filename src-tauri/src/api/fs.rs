@@ -74,7 +74,7 @@ pub(crate) fn canonicalize_existing_plugin_path(input: &str) -> Result<PathBuf> 
 ///
 /// 这样 `/allowed/link/new.txt` 中若 `link -> /outside`，最终 resource 会成为
 /// `/outside/new.txt`，不会再通过 `/allowed/**` 的字符串权限范围。
-fn canonicalize_creation_plugin_path(input: &str) -> Result<PathBuf> {
+pub(crate) fn canonicalize_creation_plugin_path(input: &str) -> Result<PathBuf> {
     let path = absolute_plugin_path(input)?;
     let mut cursor = path.as_path();
     let mut missing: Vec<OsString> = Vec::new();
