@@ -321,6 +321,32 @@ impl PermissionEngine {
         }
     }
 
+    /// 为需要持久后台授权的调用主动发起审批。
+    ///
+    /// 与 `enforce` 不同：Session/Once 不能满足后台任务，因此它们不会阻止新的审批弹窗。
+    /// 已有精确匹配的 Always grant 时直接复用；否则强制走一次标准审批流程。
+    pub async fn request_persistent_approval(
+        &self,
+        app: &AppHandle,
+        principal: &str,
+        capability: &str,
+        resource: Option<&str>,
+    ) -> Result<()> {
+        let key = grant_key(principal, capability, resource);
+        let existing = self
+            .grants
+            .lock()
+            .map_err(|_| VoloError::Other("Permission lock error".to_string()))?
+            .get(&key)
+            .copied();
+
+        if existing == Some(Scope::Always) {
+            return Ok(());
+        }
+
+        self.ask(app, principal, capability, resource).await
+    }
+
     /// 审批流程：发事件 → 等待响应（带超时）
     async fn ask(
         &self,

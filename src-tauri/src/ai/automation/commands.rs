@@ -69,7 +69,7 @@ pub async fn permission_request_workflow_always(
     let principal = crate::ai::workflow::commands::workflow_principal(workflow_id);
     let engine = app.state::<PermissionEngine>();
     engine
-        .enforce(&app, &principal, capability, resource.as_deref())
+        .request_persistent_approval(&app, &principal, capability, resource.as_deref())
         .await?;
 
     // Once / Session 仍不具备后台语义；必须最终存在匹配的 Always grant。
