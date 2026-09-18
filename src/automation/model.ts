@@ -1,3 +1,32 @@
+export type PermissionPreflightStatus =
+  | 'ready'
+  | 'missing'
+  | 'runtime'
+  | 'invalid'
+  | 'unsupported';
+
+export interface PermissionPreflightRequirement {
+  stepId: string;
+  toolName: string;
+  capability: string;
+  resource?: string;
+  risk: 'low' | 'medium' | 'high' | 'critical';
+  description: string;
+  status: PermissionPreflightStatus;
+  note?: string;
+}
+
+export interface AutomationPermissionPreflight {
+  workflowId: string;
+  ready: boolean;
+  fullyVerified: boolean;
+  readyCount: number;
+  missingCount: number;
+  runtimeCount: number;
+  blockerCount: number;
+  requirements: PermissionPreflightRequirement[];
+}
+
 export interface IntervalAutomationTrigger {
   type: 'interval';
   everyMinutes: number;
