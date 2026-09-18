@@ -55,7 +55,7 @@ fn absolute_plugin_path(input: &str) -> Result<PathBuf> {
 }
 
 /// 规范化一个必须存在的插件路径，并解析最终符号链接。
-fn canonicalize_existing_plugin_path(input: &str) -> Result<PathBuf> {
+pub(crate) fn canonicalize_existing_plugin_path(input: &str) -> Result<PathBuf> {
     let path = absolute_plugin_path(input)?;
     std::fs::canonicalize(&path).map_err(|e| {
         VoloError::Other(format!(
@@ -643,6 +643,29 @@ mod tests {
     fn test_plugin_path_rejects_parent_traversal() {
         let result = canonicalize_creation_plugin_path("allowed/../secret.txt");
         assert!(matches!(result, Err(VoloError::PermissionDenied(_))));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_existing_read_path_resolves_final_symlink_target() {
+        use std::os::unix::fs::symlink;
+
+        let root = temp_dir("existing_symlink");
+        let allowed = root.join("allowed");
+        let outside = root.join("outside");
+        std::fs::create_dir_all(&allowed).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+
+        let target = outside.join("secret.txt");
+        std::fs::write(&target, "secret").unwrap();
+        let link = allowed.join("input.txt");
+        symlink(&target, &link).unwrap();
+
+        let resolved = canonicalize_existing_plugin_path(&link.to_string_lossy()).unwrap();
+        assert_eq!(resolved, std::fs::canonicalize(&target).unwrap());
+        assert!(!resolved.starts_with(std::fs::canonicalize(&allowed).unwrap()));
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

@@ -7,6 +7,34 @@ use crate::error::{Result, VoloError};
 
 use super::{storage, AutomationRecord, WorkflowAutomation};
 
+fn normalize_background_resource(
+    capability: &str,
+    resource: Option<String>,
+) -> Result<Option<String>> {
+    let resource = resource.and_then(|value| {
+        let trimmed = value.trim();
+        (!trimmed.is_empty()).then(|| trimmed.to_string())
+    });
+
+    if capability == "fs.read" {
+        let path = resource.as_deref().ok_or_else(|| {
+            VoloError::Other(
+                "Background fs.read grant requires an existing file resource".to_string(),
+            )
+        })?;
+        let resolved = crate::api::fs::canonicalize_existing_plugin_path(path)?;
+        if !resolved.is_file() {
+            return Err(VoloError::Other(format!(
+                "Background fs.read grant requires a file resource: {}",
+                resolved.display()
+            )));
+        }
+        return Ok(Some(resolved.to_string_lossy().into_owned()));
+    }
+
+    Ok(resource)
+}
+
 #[tauri::command]
 pub fn automation_list(app: AppHandle) -> Result<Vec<AutomationRecord>> {
     storage::list_automations(&storage::automations_dir(&app)?)
@@ -66,6 +94,7 @@ pub async fn permission_request_workflow_always(
         )));
     }
 
+    let resource = normalize_background_resource(capability, resource)?;
     let principal = crate::ai::workflow::commands::workflow_principal(workflow_id);
     let engine = app.state::<PermissionEngine>();
     engine
@@ -74,4 +103,49 @@ pub async fn permission_request_workflow_always(
 
     // Once / Session 仍不具备后台语义；必须最终存在匹配的 Always grant。
     enforce_background(&engine, &principal, capability, resource.as_deref())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn background_fs_read_requires_an_existing_resource_and_canonicalizes_it() {
+        assert!(normalize_background_resource("fs.read", None).is_err());
+
+        let dir = std::env::temp_dir().join(format!(
+            "volo-background-fs-grant-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("input.txt");
+        std::fs::write(&file, "hello").unwrap();
+
+        let normalized = normalize_background_resource(
+            "fs.read",
+            Some(file.to_string_lossy().into_owned()),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            std::path::PathBuf::from(normalized),
+            std::fs::canonicalize(&file).unwrap()
+        );
+
+        assert!(normalize_background_resource(
+            "fs.read",
+            Some(dir.to_string_lossy().into_owned()),
+        )
+        .is_err());
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn non_filesystem_background_resource_stays_optional() {
+        assert_eq!(
+            normalize_background_resource("clipboard.read", None).unwrap(),
+            None
+        );
+    }
 }
