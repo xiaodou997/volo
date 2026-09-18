@@ -361,7 +361,7 @@ impl ToolRegistry {
     }
 
     /// 展开路径开头的 `~` 为用户主目录（LLM 常传字面量 `~/...`，std::fs 不会展开）
-    fn expand_tilde(path: &str) -> String {
+    pub(crate) fn expand_tilde(path: &str) -> String {
         let home = if path == "~" {
             Some("")
         } else {
