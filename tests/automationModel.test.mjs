@@ -2,9 +2,11 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  automationRetryLabel,
   automationTriggerLabel,
   buildDailyAutomation,
   buildIntervalAutomation,
+  buildRetryPolicy,
   formatAutomationNextRun,
   formatDailyTime,
   parseDailyTime,
@@ -43,6 +45,44 @@ test('automation draft validation rejects invalid definitions', () => {
   assert.throws(() => buildIntervalAutomation('job', 'workflow-1', 1.5, true), /运行间隔/);
   assert.throws(() => buildDailyAutomation('job', 'workflow-1', 24, 0, true), /每日运行时间/);
   assert.throws(() => buildDailyAutomation('job', 'workflow-1', 23, 60, true), /每日运行时间/);
+});
+
+test('retry policy is optional, validated, and included only when enabled', () => {
+  const retryPolicy = buildRetryPolicy(2, 3);
+  assert.deepEqual(retryPolicy, { maxRetries: 2, backoffMinutes: 3 });
+
+  assert.deepEqual(
+    buildIntervalAutomation('job', 'workflow-1', 15, true, retryPolicy).retryPolicy,
+    retryPolicy,
+  );
+  assert.equal(
+    Object.hasOwn(buildIntervalAutomation('job', 'workflow-1', 15, true), 'retryPolicy'),
+    false,
+  );
+
+  assert.throws(() => buildRetryPolicy(0, 1), /最大重试次数/);
+  assert.throws(() => buildRetryPolicy(11, 1), /最大重试次数/);
+  assert.throws(() => buildRetryPolicy(2, 0), /重试间隔/);
+  assert.throws(() => buildRetryPolicy(2, 1441), /重试间隔/);
+});
+
+test('retry label shows pending runtime state before static policy', () => {
+  const record = {
+    ...buildIntervalAutomation('job', 'workflow-1', 15, true, buildRetryPolicy(2, 3)),
+    nextRunAt: '2026-09-17T12:30:00.000Z',
+    retryState: {
+      attempt: 1,
+      retryAt: '2026-09-17T12:18:00.000Z',
+    },
+  };
+
+  assert.match(automationRetryLabel(record), /第 1 次重试/);
+  const withoutRuntime = { ...record, retryState: undefined };
+  assert.match(automationRetryLabel(withoutRuntime), /最多重试 2 次/);
+  assert.equal(
+    automationRetryLabel(buildIntervalAutomation('no-retry', 'workflow-1', 15, true)),
+    '不重试',
+  );
 });
 
 test('daily time parser and formatter keep HH:mm stable', () => {
