@@ -5,6 +5,7 @@
 //! 核心时间计算保持纯函数；definition/runtime state 的持久化与后台 scheduler 分模块实现。
 
 pub(crate) mod commands;
+pub(crate) mod preflight;
 pub(crate) mod scheduler;
 mod storage;
 pub use storage::{AutomationRecord, AutomationRetryState};

@@ -10,12 +10,15 @@ import {
   formatAutomationNextRun,
   formatDailyTime,
   parseDailyTime,
+  type AutomationPermissionPreflight,
   type AutomationRecord,
+  type PermissionPreflightStatus,
 } from '../automation/model';
 import type { WorkflowOption } from '../workflow/model';
 
 const props = defineProps<{
   workflows: WorkflowOption[];
+  permissionRevision: number;
 }>();
 
 const records = shallowRef<AutomationRecord[]>([]);
@@ -32,6 +35,9 @@ const enabled = ref(true);
 const busy = ref(false);
 const status = ref('');
 const error = ref('');
+const preflight = shallowRef<AutomationPermissionPreflight | null>(null);
+const preflightBusy = ref(false);
+const preflightError = ref('');
 
 const selectedRecord = computed(
   () => records.value.find((record) => record.id === selectedAutomationId.value) ?? null,
@@ -49,6 +55,52 @@ function errorText(value: unknown): string {
     return JSON.stringify(value);
   } catch {
     return String(value);
+  }
+}
+
+function preflightStatusLabel(status: PermissionPreflightStatus): string {
+  switch (status) {
+    case 'ready':
+      return 'Ready';
+    case 'missing':
+      return 'Missing';
+    case 'runtime':
+      return 'Runtime';
+    case 'invalid':
+      return 'Invalid';
+    case 'unsupported':
+      return 'Unsupported';
+  }
+}
+
+const preflightSummary = computed(() => {
+  const value = preflight.value;
+  if (!value) return '尚未检查';
+  if (value.blockerCount > 0) return `${value.blockerCount} 项阻断`;
+  if (value.missingCount > 0) return `缺少 ${value.missingCount} 项 Always 授权`;
+  if (value.runtimeCount > 0) return `已知权限就绪 · ${value.runtimeCount} 项运行时复核`;
+  return '全部权限就绪';
+});
+
+async function refreshPreflight() {
+  if (!workflowId.value) {
+    preflight.value = null;
+    preflightError.value = '';
+    return;
+  }
+
+  preflightBusy.value = true;
+  preflightError.value = '';
+  try {
+    preflight.value = await invoke<AutomationPermissionPreflight>(
+      'automation_permission_preflight',
+      { workflowId: workflowId.value },
+    );
+  } catch (value) {
+    preflight.value = null;
+    preflightError.value = errorText(value);
+  } finally {
+    preflightBusy.value = false;
   }
 }
 
@@ -170,8 +222,11 @@ async function manualRefresh() {
   error.value = '';
   try {
     busy.value = true;
-    await refreshAutomations(selectedAutomationId.value || undefined);
-    status.value = '已刷新调度状态';
+    await Promise.all([
+      refreshAutomations(selectedAutomationId.value || undefined),
+      refreshPreflight(),
+    ]);
+    status.value = '已刷新调度状态与权限预检';
   } catch (value) {
     error.value = errorText(value);
   } finally {
@@ -188,6 +243,15 @@ watch(
   },
   { immediate: true },
 );
+
+watch(
+  () => [workflowId.value, props.permissionRevision] as const,
+  () => {
+    void refreshPreflight();
+  },
+  { immediate: true },
+);
+
 
 onMounted(() => {
   void refreshAutomations().catch((value) => {
@@ -246,6 +310,59 @@ onMounted(() => {
           </option>
         </select>
       </label>
+
+      <section class="preflight-card">
+        <div class="preflight-heading">
+          <div>
+            <strong>后台权限预检</strong>
+            <span>{{ preflightBusy ? '检查中…' : preflightSummary }}</span>
+          </div>
+          <button
+            class="ghost-btn"
+            :disabled="preflightBusy || !workflowId"
+            @click="refreshPreflight"
+          >
+            检查
+          </button>
+        </div>
+
+        <div
+          v-if="preflight"
+          class="preflight-summary"
+          :class="{
+            ready: preflight.fullyVerified,
+            warning: preflight.ready && !preflight.fullyVerified,
+            danger: !preflight.ready,
+          }"
+        >
+          <span>{{ preflight.readyCount }} Ready</span>
+          <span v-if="preflight.missingCount">{{ preflight.missingCount }} Missing</span>
+          <span v-if="preflight.runtimeCount">{{ preflight.runtimeCount }} Runtime</span>
+          <span v-if="preflight.blockerCount">{{ preflight.blockerCount }} Blocked</span>
+        </div>
+
+        <div v-if="preflight?.requirements.length" class="preflight-list">
+          <div
+            v-for="item in preflight.requirements"
+            :key="item.stepId + ':' + item.toolName + ':' + item.capability + ':' + (item.resource ?? '')"
+            class="preflight-item"
+          >
+            <span class="preflight-status" :class="'status-' + item.status">
+              {{ preflightStatusLabel(item.status) }}
+            </span>
+            <div class="preflight-copy">
+              <strong>{{ item.stepId }} · {{ item.capability }}</strong>
+              <code v-if="item.resource">{{ item.resource }}</code>
+              <span>{{ item.note || item.description }}</span>
+            </div>
+          </div>
+        </div>
+
+        <div v-else-if="preflight && !preflightBusy" class="preflight-empty">
+          此 Workflow 没有需要持久授权的后台能力。
+        </div>
+        <div v-if="preflightError" class="error-message">{{ preflightError }}</div>
+      </section>
 
       <label class="field-block">
         <span>调度方式</span>
@@ -644,15 +761,136 @@ onMounted(() => {
 
 .scheduler-card,
 .policy-card,
-.automation-card {
+.automation-card,
+.preflight-card {
   border: 1px solid var(--border-color);
   border-radius: 9px;
   background: var(--bg-secondary);
 }
 
 .scheduler-card,
-.policy-card {
+.policy-card,
+.preflight-card {
   padding: 11px 12px;
+}
+
+.preflight-card {
+  margin-top: 10px;
+}
+
+.preflight-heading,
+.preflight-heading > div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.preflight-heading {
+  justify-content: space-between;
+}
+
+.preflight-heading > div {
+  min-width: 0;
+}
+
+.preflight-heading strong {
+  font-size: 11px;
+}
+
+.preflight-heading span,
+.preflight-empty {
+  color: var(--text-tertiary);
+  font-size: 9px;
+}
+
+.preflight-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+  font-size: 9px;
+}
+
+.preflight-summary.ready {
+  color: #34c759;
+}
+
+.preflight-summary.warning {
+  color: #ff9f0a;
+}
+
+.preflight-summary.danger {
+  color: var(--danger-color);
+}
+
+.preflight-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.preflight-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border-color);
+}
+
+.preflight-status {
+  flex: 0 0 auto;
+  padding: 2px 5px;
+  border-radius: 999px;
+  font-size: 8px;
+  font-weight: 650;
+  background: var(--bg-primary);
+}
+
+.status-ready {
+  color: #34c759;
+}
+
+.status-missing,
+.status-invalid,
+.status-unsupported {
+  color: var(--danger-color);
+}
+
+.status-runtime {
+  color: #ff9f0a;
+}
+
+.preflight-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.preflight-copy strong,
+.preflight-copy code,
+.preflight-copy span {
+  font-size: 9px;
+  line-height: 1.4;
+}
+
+.preflight-copy strong {
+  color: var(--text-secondary);
+}
+
+.preflight-copy code {
+  overflow-wrap: anywhere;
+  color: var(--text-tertiary);
+}
+
+.preflight-copy span,
+.preflight-empty {
+  color: var(--text-tertiary);
+}
+
+.preflight-empty {
+  margin-top: 8px;
 }
 
 .scheduler-heading {

@@ -224,19 +224,8 @@ impl ToolRegistry {
         let capability = Self::capability_of(name)
             .ok_or_else(|| VoloError::NotFound(format!("tool: {}", name)))?;
 
-        // 路径类参数先展开 `~` 再进权限管道，审批弹窗与审计日志展示真实路径
-        let resource_owned = match name {
-            "fs_read" | "fs_write" => args
-                .get("path")
-                .and_then(Value::as_str)
-                .map(Self::expand_tilde),
-            "shell_open" => args
-                .get("target")
-                .and_then(Value::as_str)
-                .map(Self::expand_tilde),
-            "skill_load" => args.get("name").and_then(Value::as_str).map(String::from),
-            _ => None,
-        };
+        // 资源解析必须与实际 I/O 使用同一个路径，权限提示、预检和执行才能保持一致。
+        let resource_owned = Self::resource_for(name, args)?;
         let resource = resource_owned.as_deref();
 
         match mode {
@@ -257,11 +246,10 @@ impl ToolRegistry {
                 Ok(Value::String(text))
             }
             "fs_read" => {
-                let path = args
-                    .get("path")
-                    .and_then(Value::as_str)
+                let path = resource_owned
+                    .as_deref()
                     .ok_or_else(|| VoloError::Other("fs_read 缺少必填参数 path".to_string()))?;
-                let content = std::fs::read_to_string(Self::expand_tilde(path))?;
+                let content = std::fs::read_to_string(path)?;
                 Ok(Value::String(Self::truncate(&content)))
             }
             "notification_show" => {
@@ -344,8 +332,36 @@ impl ToolRegistry {
         }
     }
 
+    /// 计算工具调用用于权限裁决的资源。
+    ///
+    /// fs_read 会先展开 ~ 并 canonicalize，随后实际 I/O 也使用同一路径；
+    /// 其他现有工具保持原资源语义。预检复用此函数可避免“检查一个路径、执行另一个路径”。
+    pub(crate) fn resource_for(name: &str, args: &Value) -> Result<Option<String>> {
+        match name {
+            "fs_read" => {
+                let path = args
+                    .get("path")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| VoloError::Other("fs_read 缺少必填参数 path".to_string()))?;
+                let expanded = Self::expand_tilde(path);
+                let resolved = crate::api::fs::canonicalize_existing_plugin_path(&expanded)?;
+                Ok(Some(resolved.to_string_lossy().into_owned()))
+            }
+            "fs_write" => Ok(args
+                .get("path")
+                .and_then(Value::as_str)
+                .map(Self::expand_tilde)),
+            "shell_open" => Ok(args
+                .get("target")
+                .and_then(Value::as_str)
+                .map(Self::expand_tilde)),
+            "skill_load" => Ok(args.get("name").and_then(Value::as_str).map(String::from)),
+            _ => Ok(None),
+        }
+    }
+
     /// 展开路径开头的 `~` 为用户主目录（LLM 常传字面量 `~/...`，std::fs 不会展开）
-    fn expand_tilde(path: &str) -> String {
+    pub(crate) fn expand_tilde(path: &str) -> String {
         let home = if path == "~" {
             Some("")
         } else {
