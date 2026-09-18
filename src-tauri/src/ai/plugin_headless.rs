@@ -4,11 +4,11 @@
 //! plugin Tool JavaScript in an embedded QuickJS runtime with no DOM, network, filesystem or
 //! other host APIs exposed by default.
 //!
-//! v2 keeps pure-compute Tool support and adds a deliberately small low-risk host surface:
-//! clipboard.writeText, notification.show, db.*, and storage.*. Every host call must be declared
-//! by the plugin manifest and is evaluated with the Workflow principal through the same
-//! non-interactive background permission path used by BackgroundToolExecutor. Medium/high-risk
-//! host APIs remain explicit rejections until Workflow-scoped grant acquisition is designed.
+//! v3 keeps pure-compute Tool support and the low-risk host surface, and adds clipboard.readText
+//! as the first Medium-risk headless API. Every host call must be declared by the plugin manifest
+//! and is evaluated with the Workflow principal through the same non-interactive background
+//! permission path used by BackgroundToolExecutor. Medium/high-risk APIs require a Workflow-scoped
+//! Always grant before unattended execution; unsupported host APIs still fail fast.
 
 use std::time::{Duration, Instant};
 
@@ -90,7 +90,9 @@ const HEADLESS_SHIM: &str = r#"
     },
 
     clipboard: {
-      readText: unsupported("clipboard.readText"),
+      readText: function () {
+        return call("clipboard.readText", {});
+      },
       writeText: function (text) {
         return call("clipboard.writeText", { text: text });
       },
@@ -257,6 +259,14 @@ impl HeadlessPluginHost {
 
     fn call(&self, method: &str, args: Value) -> Result<Value> {
         match method {
+            "clipboard.readText" => {
+                self.authorize("clipboard.read")?;
+                self.app
+                    .clipboard()
+                    .read_text()
+                    .map(Value::String)
+                    .map_err(|error| VoloError::Other(format!("Clipboard read failed: {}", error)))
+            }
             "clipboard.writeText" => {
                 self.authorize("clipboard.write")?;
                 let text = Self::string_arg(&args, "text", method)?;
@@ -527,7 +537,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn host_api_fails_fast_instead_of_using_renderer_or_bypassing_permissions() {
+    async fn unsupported_host_api_fails_fast_instead_of_using_renderer() {
+        let source = r#"
+            rubick.tool.onInvoke(async function () {
+              return await rubick.screenCapture();
+            });
+        "#;
+
+        let error = execute_source(source, json!({})).await.unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("headless plugin host API is not supported yet: screenCapture"));
+    }
+
+    #[tokio::test]
+    async fn pure_runtime_does_not_silently_enable_supported_host_calls() {
         let source = r#"
             rubick.tool.onInvoke(async function () {
               return await rubick.clipboard.readText();
@@ -537,26 +561,16 @@ mod tests {
         let error = execute_source(source, json!({})).await.unwrap_err();
         assert!(error
             .to_string()
-            .contains("headless plugin host API is not supported yet: clipboard.readText"));
-    }
-
-    #[tokio::test]
-    async fn pure_runtime_does_not_silently_enable_supported_host_calls() {
-        let source = r#"
-            rubick.tool.onInvoke(async function () {
-              await rubick.clipboard.writeText("secret");
-              return { ok: true };
-            });
-        "#;
-
-        let error = execute_source(source, json!({})).await.unwrap_err();
-        assert!(error
-            .to_string()
-            .contains("headless plugin host API is unavailable in pure runtime: clipboard.writeText"));
+            .contains("headless plugin host API is unavailable in pure runtime: clipboard.readText"));
     }
 
     #[test]
-    fn low_risk_host_method_capabilities_match_existing_plugin_contract() {
+    fn headless_host_method_capabilities_match_existing_plugin_contract() {
+        assert!(PermissionEngine::declared(
+            &["clipboard.read".to_string()],
+            "clipboard.read",
+            None
+        ));
         assert_eq!(
             PermissionEngine::declared(&["clipboard.write".to_string()], "clipboard.write", None),
             true
