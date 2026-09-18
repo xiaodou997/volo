@@ -105,7 +105,6 @@ pub async fn permission_request_workflow_always(
     enforce_background(&engine, &principal, capability, resource.as_deref())
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
