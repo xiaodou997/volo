@@ -1,7 +1,7 @@
 // 生成指定数量的 UUID v4，返回字符串数组。
 // Tool 工具：无界面，入口通过 rubick.tool.onInvoke 注册，
-// 由宿主在隐藏 iframe 中调用；返回值（或 Promise resolve 值）回传给 Agent。
-// crypto.randomUUID 在 opaque origin iframe 中可用。
+// 前台仍可由 renderer iframe 调用；后台 Automation 会在受限 QuickJS runtime 中调用。
+// 两种 runtime 都提供 crypto.randomUUID。
 
 rubick.tool.onInvoke(function (input) {
   var count = input && typeof input.count === 'number' ? Math.floor(input.count) : 1;
