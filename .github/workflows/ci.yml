@@ -58,6 +58,13 @@ jobs:
         working-directory: src-tauri
         run: cargo clippy --all-targets --all-features
 
+      - name: Export resolved Cargo lockfile
+        uses: actions/upload-artifact@v4
+        with:
+          name: resolved-cargo-lock
+          path: src-tauri/Cargo.lock
+          if-no-files-found: error
+
       - name: Rust tests
         working-directory: src-tauri
         run: cargo test --all-features
