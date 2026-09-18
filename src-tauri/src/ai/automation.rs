@@ -19,6 +19,9 @@ use crate::error::{Result, VoloError};
 const MAX_AUTOMATION_ID_LEN: usize = 128;
 const MAX_INTERVAL_MINUTES: u32 = 525_600; // 1 year
 const DAILY_DST_SEARCH_MINUTES: i64 = 180;
+pub(crate) const MAX_RETRIES: u32 = 5;
+pub(crate) const MIN_RETRY_DELAY_SECONDS: u32 = 15;
+pub(crate) const MAX_RETRY_DELAY_SECONDS: u32 = 3_600;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -27,6 +30,15 @@ pub struct WorkflowAutomation {
     pub workflow_id: String,
     pub enabled: bool,
     pub trigger: AutomationTrigger,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry: Option<AutomationRetryPolicy>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AutomationRetryPolicy {
+    pub max_retries: u32,
+    pub initial_delay_seconds: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -84,7 +96,51 @@ pub fn validate_automation(automation: &WorkflowAutomation) -> Result<()> {
         return Err(VoloError::Other("automation workflowId 不能为空".to_string()));
     }
 
-    automation.trigger.validate()
+    automation.trigger.validate()?;
+    if let Some(retry) = &automation.retry {
+        validate_retry_policy(retry)?;
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_retry_policy(policy: &AutomationRetryPolicy) -> Result<()> {
+    if policy.max_retries > MAX_RETRIES {
+        return Err(VoloError::Other(format!(
+            "automation maxRetries 不能超过 {}",
+            MAX_RETRIES
+        )));
+    }
+    if policy.max_retries > 0
+        && (policy.initial_delay_seconds < MIN_RETRY_DELAY_SECONDS
+            || policy.initial_delay_seconds > MAX_RETRY_DELAY_SECONDS)
+    {
+        return Err(VoloError::Other(format!(
+            "automation retry 初始延迟必须在 {}..={} 秒之间",
+            MIN_RETRY_DELAY_SECONDS, MAX_RETRY_DELAY_SECONDS
+        )));
+    }
+    Ok(())
+}
+
+/// 计算第 `retry_number` 次重试的指数退避延迟。
+/// retry_number 从 1 开始；延迟按 initial * 2^(n-1) 增长并封顶 1 小时。
+pub(crate) fn retry_delay_seconds(
+    policy: &AutomationRetryPolicy,
+    retry_number: u32,
+) -> Result<u32> {
+    validate_retry_policy(policy)?;
+    if retry_number == 0 || retry_number > policy.max_retries {
+        return Err(VoloError::Other(
+            "automation retry number 超出策略范围".to_string(),
+        ));
+    }
+
+    let shift = retry_number.saturating_sub(1).min(31);
+    let multiplier = 1_u64 << shift;
+    let delay = u64::from(policy.initial_delay_seconds)
+        .saturating_mul(multiplier)
+        .min(u64::from(MAX_RETRY_DELAY_SECONDS));
+    Ok(delay as u32)
 }
 
 fn interval_seconds(every_minutes: u32) -> Result<i64> {
@@ -263,6 +319,7 @@ mod tests {
             workflow_id: "clipboard-notify".to_string(),
             enabled: true,
             trigger: interval(15),
+            retry: None,
         };
 
         assert_eq!(
@@ -283,6 +340,7 @@ mod tests {
             workflow_id: "clipboard-notify".to_string(),
             enabled: true,
             trigger: daily(9, 30),
+            retry: None,
         };
         assert_eq!(
             serde_json::to_value(&daily_automation).unwrap(),
@@ -306,6 +364,7 @@ mod tests {
             workflow_id: "workflow-1".to_string(),
             enabled: true,
             trigger: interval(15),
+            retry: None,
         };
         assert!(validate_automation(&valid).is_ok());
 
@@ -326,6 +385,53 @@ mod tests {
         assert!(validate_automation(&invalid).is_err());
         invalid.trigger = daily(23, 60);
         assert!(validate_automation(&invalid).is_err());
+    }
+
+    #[test]
+    fn retry_policy_serializes_and_uses_capped_exponential_backoff() {
+        let automation = WorkflowAutomation {
+            id: "retry-job".to_string(),
+            workflow_id: "workflow-1".to_string(),
+            enabled: true,
+            trigger: interval(15),
+            retry: Some(AutomationRetryPolicy {
+                max_retries: 3,
+                initial_delay_seconds: 30,
+            }),
+        };
+
+        assert_eq!(
+            serde_json::to_value(&automation).unwrap()["retry"],
+            json!({
+                "maxRetries": 3,
+                "initialDelaySeconds": 30
+            })
+        );
+        let policy = automation.retry.as_ref().unwrap();
+        assert_eq!(retry_delay_seconds(policy, 1).unwrap(), 30);
+        assert_eq!(retry_delay_seconds(policy, 2).unwrap(), 60);
+        assert_eq!(retry_delay_seconds(policy, 3).unwrap(), 120);
+    }
+
+    #[test]
+    fn retry_policy_validation_is_bounded() {
+        let too_many = AutomationRetryPolicy {
+            max_retries: MAX_RETRIES + 1,
+            initial_delay_seconds: 30,
+        };
+        assert!(validate_retry_policy(&too_many).is_err());
+
+        let too_fast = AutomationRetryPolicy {
+            max_retries: 1,
+            initial_delay_seconds: MIN_RETRY_DELAY_SECONDS - 1,
+        };
+        assert!(validate_retry_policy(&too_fast).is_err());
+
+        let disabled = AutomationRetryPolicy {
+            max_retries: 0,
+            initial_delay_seconds: 0,
+        };
+        assert!(validate_retry_policy(&disabled).is_ok());
     }
 
     #[test]
