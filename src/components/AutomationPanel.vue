@@ -388,7 +388,7 @@ onMounted(() => {
           <li>Daily 使用当前系统本地时区；遇到 DST 跳时会顺延到第一个有效分钟。</li>
           <li>Medium / High / Critical 能力必须提前授予 Workflow <code>Always</code> 权限。</li>
           <li>内置 Tool、MCP Tool、AI Step 可后台执行。</li>
-          <li>Plugin Tool 可通过 Headless Runtime 后台执行；clipboard.read 已支持，但必须先给对应 Workflow 授予 Always；其他未接入的中高风险宿主 API 仍会明确拒绝。</li>
+          <li>Plugin Tool 可通过 Headless Runtime 后台执行；clipboard.read 与非交互整屏 screen.capture 已支持，但必须先给对应 Workflow 授予 Always；交互式区域截图和其他未接入的中高风险宿主 API 仍会明确拒绝。</li>
           <li>未配置 Retry 时失败不会重试；启用后按固定间隔重试，且不会跨过下一次正常调度。</li>
           <li>每次执行结果仍会写入 Workflow「最近运行」，便于审计失败与重试过程。</li>
         </ul>
