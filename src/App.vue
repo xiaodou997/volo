@@ -14,6 +14,7 @@ import PluginView from './components/PluginView.vue';
 import SubInput from './components/SubInput.vue';
 import SettingsView from './components/SettingsView.vue';
 import WorkflowView from './components/WorkflowView.vue';
+import AutomationView from './components/AutomationView.vue';
 import AgentView from './components/AgentView.vue';
 import PluginManager from './components/PluginManager.vue';
 import ApprovalDialog from './components/ApprovalDialog.vue';
@@ -32,6 +33,7 @@ const searchStore = useSearchStore();
 const pluginMode = ref(false);
 const settingsMode = ref(false);
 const workflowMode = ref(false);
+const automationMode = ref(false);
 const pluginManagerMode = ref(false);
 const agentMode = ref(false);
 const agentQuery = ref('');
@@ -66,6 +68,10 @@ const windowHeight = computed(() => {
 
   if (workflowMode.value) {
     return 520; // Workflow 编辑器 + execution timeline
+  }
+
+  if (automationMode.value) {
+    return 520; // Automation 管理器固定高度
   }
 
   if (agentMode.value) {
@@ -120,6 +126,12 @@ function handleInput(value: string) {
     return;
   }
 
+  // Automation 入口
+  if (value.toLowerCase() === 'automation' || value === '自动化') {
+    enterAutomation();
+    return;
+  }
+
   // 检查是否是插件管理命令
   if (value.toLowerCase() === 'plugins' || value === '插件') {
     enterPluginManager();
@@ -149,6 +161,9 @@ function handleClear() {
   } else if (workflowMode.value) {
     // 退出 Workflow 模式
     exitWorkflow();
+  } else if (automationMode.value) {
+    // 退出 Automation 模式
+    exitAutomation();
   } else if (pluginManagerMode.value) {
     // 退出插件管理模式
     exitPluginManager();
@@ -376,6 +391,19 @@ function exitWorkflow() {
   updateWindowSize();
 }
 
+// 进入 Automation 管理器
+function enterAutomation() {
+  automationMode.value = true;
+  searchStore.clearSearch();
+  updateWindowSize();
+}
+
+// 退出 Automation，返回启动器
+function exitAutomation() {
+  automationMode.value = false;
+  updateWindowSize();
+}
+
 // 进入插件管理模式
 function enterPluginManager() {
   pluginManagerMode.value = true;
@@ -434,7 +462,7 @@ async function updateWindowSize() {
 // 搜索结果到达（防抖后异步）时重新计算窗口高度，
 // 否则单次输入（如粘贴一整段）会用空结果算出 60px，列表被裁掉
 watch(() => searchStore.results, () => {
-  if (!pluginMode.value && !settingsMode.value && !workflowMode.value && !pluginManagerMode.value && !agentMode.value) {
+  if (!pluginMode.value && !settingsMode.value && !workflowMode.value && !automationMode.value && !pluginManagerMode.value && !agentMode.value) {
     updateWindowSize();
   }
 });
@@ -467,13 +495,13 @@ onMounted(async () => {
   const unlistenPluginsChanged = await listen('plugins-changed', () => {
     if (pluginMode.value && currentPlugin.value) {
       pluginReloadKey.value++;
-    } else if (!settingsMode.value && !workflowMode.value && !pluginManagerMode.value && !agentMode.value) {
+    } else if (!settingsMode.value && !workflowMode.value && !automationMode.value && !pluginManagerMode.value && !agentMode.value) {
       searchStore.search(searchStore.query);
     }
   });
   const unlisten = await mainWindow.onFocusChanged(({ payload }: { payload: boolean }) => {
-    if (!payload && hideOnBlur.value && !nativeDialogOpen.value && !settingsMode.value && !workflowMode.value && !pluginManagerMode.value && !pluginMode.value && !agentMode.value) {
-      // 失焦时隐藏（用户可在设置中关闭；排除原生对话框打开中、设置模式、插件管理模式、插件模式、Workflow 模式和 Agent 模式）
+    if (!payload && hideOnBlur.value && !nativeDialogOpen.value && !settingsMode.value && !workflowMode.value && !automationMode.value && !pluginManagerMode.value && !pluginMode.value && !agentMode.value) {
+      // 失焦时隐藏（用户可在设置中关闭；排除原生对话框打开中、设置模式、插件管理模式、插件模式、Workflow 模式、Automation 模式和 Agent 模式）
       // list 命令模式：失焦隐藏同时销毁 iframe、退出模式
       if (listCommandMode.value) {
         exitListCommand();
@@ -500,6 +528,11 @@ onMounted(async () => {
     <!-- Workflow 手动运行器 -->
     <template v-else-if="workflowMode">
       <WorkflowView @back="exitWorkflow" />
+    </template>
+
+    <!-- Automation 管理器 -->
+    <template v-else-if="automationMode">
+      <AutomationView @back="exitAutomation" />
     </template>
 
     <!-- Agent 模式 -->
