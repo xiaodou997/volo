@@ -125,7 +125,7 @@ onMounted(() => {
         <input
           v-model="resource"
           class="permission-input"
-          :placeholder="resourceRequired ? '已存在文件的完整路径（必填）' : 'Resource，可选'"
+          :placeholder="resourceRequired ? '文件 / 目录 / 目标完整路径（必填）' : 'Resource，可选'"
           :disabled="busy"
         />
 
@@ -139,7 +139,7 @@ onMounted(() => {
       </div>
 
       <p class="permission-hint">
-        Medium / High / Critical 能力仍会弹出标准审批框；只有选择“始终允许”后，后台 Scheduler 才会接受该授权。fs.read 必须填写当前已存在文件，后端会保存其规范化真实路径。
+        Medium / High / Critical 能力仍会弹出标准审批框；只有选择“始终允许”后，后台 Scheduler 才会接受该授权。fs.read 必须填写精确路径；已存在文件/目录会解析为真实路径，exists 使用的未创建目标会按真实父目录规范化。目录授权不会自动覆盖子文件。
       </p>
 
       <div v-if="workflowGrants.length" class="grant-list">
