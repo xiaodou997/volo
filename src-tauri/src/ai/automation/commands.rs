@@ -3,9 +3,10 @@ use tauri::{AppHandle, Manager};
 
 use crate::core::capability::{capability_meta, RiskLevel};
 use crate::core::permission::{enforce_background, PermissionEngine};
+use crate::ai::tools::ToolRegistry;
 use crate::error::{Result, VoloError};
 
-use super::{storage, AutomationRecord, WorkflowAutomation};
+use super::{preflight, storage, AutomationRecord, WorkflowAutomation};
 
 fn normalize_background_resource(
     capability: &str,
@@ -24,6 +25,27 @@ fn normalize_background_resource(
         })?;
         let resolved = crate::api::fs::canonicalize_creation_plugin_path(path)?;
         return Ok(Some(resolved.to_string_lossy().into_owned()));
+    }
+
+    if matches!(capability, "fs.write" | "shell.open") {
+        let value = resource.as_deref().ok_or_else(|| {
+            VoloError::Other(format!(
+                "Background {} grant requires an exact resource",
+                capability
+            ))
+        })?;
+        return Ok(Some(ToolRegistry::expand_tilde(value)));
+    }
+
+    if let Some(tool_name) = capability.strip_prefix("mcp.call:") {
+        let resource = resource.unwrap_or_else(|| tool_name.to_string());
+        if resource != tool_name {
+            return Err(VoloError::Other(format!(
+                "MCP background grant resource must match capability tool '{}'",
+                tool_name
+            )));
+        }
+        return Ok(Some(resource));
     }
 
     Ok(resource)
@@ -159,4 +181,54 @@ mod tests {
             None
         );
     }
+
+    #[test]
+    fn resource_bound_grants_normalize_like_runtime_execution() {
+        let home = dirs::home_dir().unwrap();
+        assert_eq!(
+            normalize_background_resource(
+                "fs.write",
+                Some("~/Documents/output.txt".to_string()),
+            )
+            .unwrap(),
+            Some(home.join("Documents/output.txt").to_string_lossy().into_owned())
+        );
+
+        assert_eq!(
+            normalize_background_resource(
+                "shell.open",
+                Some("https://example.com/path".to_string()),
+            )
+            .unwrap(),
+            Some("https://example.com/path".to_string())
+        );
+    }
+
+    #[test]
+    fn mcp_background_resource_defaults_to_exact_tool_and_rejects_mismatch() {
+        let capability = "mcp.call:mcp__server__tool";
+        assert_eq!(
+            normalize_background_resource(capability, None).unwrap(),
+            Some("mcp__server__tool".to_string())
+        );
+        assert!(normalize_background_resource(
+            capability,
+            Some("mcp__other__tool".to_string()),
+        )
+        .is_err());
+    }
+}
+
+
+#[tauri::command]
+pub fn automation_permission_preflight(
+    app: AppHandle,
+    workflow_id: String,
+) -> Result<preflight::AutomationPermissionPreflight> {
+    let workflow_id = workflow_id.trim();
+    if workflow_id.is_empty() {
+        return Err(VoloError::Other("workflow_id cannot be empty".to_string()));
+    }
+    let workflow = crate::ai::workflow::commands::load_saved_workflow(&app, workflow_id)?;
+    preflight::analyze(&app, &workflow)
 }
