@@ -239,7 +239,23 @@ fn analyze_plugin(
             None,
             PreflightStatus::Runtime,
             Some(
-                "Plugin Tool 的实际宿主调用与资源由脚本运行时决定；Scheduler 仍会逐次执行 manifest + Always 校验"
+                "Plugin Tool 是否实际调用该能力、以及资源值，都由脚本运行时决定；Scheduler 会逐次执行 manifest + Always 校验"
+                    .to_string(),
+            ),
+        ));
+    }
+
+    // 即使 manifest 只有 Low 权限，也不能仅凭 manifest 证明脚本不会调用一个
+    // Headless Runtime 尚未接入的宿主 API。因此 Plugin Tool 至少保留一项 Runtime 复核。
+    if requirements.is_empty() {
+        requirements.push(requirement(
+            step_id,
+            name,
+            "plugin.runtime",
+            None,
+            PreflightStatus::Runtime,
+            Some(
+                "Plugin Tool 的具体宿主 API 调用只能在 Headless Runtime 执行时确认"
                     .to_string(),
             ),
         ));
@@ -361,6 +377,38 @@ mod tests {
             "clipboard.read",
             None
         ));
+    }
+
+    #[test]
+    fn plugin_runtime_status_is_never_treated_as_fully_static() {
+        let plugin = crate::plugin::manager::Plugin {
+            id: "demo".to_string(),
+            name: "Demo".to_string(),
+            version: "1.0.0".to_string(),
+            main: "index.html".to_string(),
+            path: std::path::PathBuf::new(),
+            features: vec![],
+            permissions: vec!["notification.show".to_string()],
+            description: None,
+            icon: None,
+            contributes: crate::plugin::manager::Contributes {
+                commands: vec![],
+                tools: vec![crate::plugin::manager::ToolManifestSpec {
+                    id: "run".to_string(),
+                    name: "Run".to_string(),
+                    description: None,
+                    parameters: serde_json::json!({"type":"object","properties":{}}),
+                    run: "tool.js".to_string(),
+                    icon: None,
+                }],
+            },
+        };
+        let llm_name = crate::ai::plugin_tools::to_llm_name("demo", "run");
+        let plugins = PluginState::for_test(vec![plugin]);
+        let items = analyze_plugin(&plugins, "step", &llm_name);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].status, PreflightStatus::Runtime);
+        assert_eq!(items[0].capability, "plugin.runtime");
     }
 
     #[test]
