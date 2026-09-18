@@ -1,5 +1,6 @@
 //! 插件系统模块
 
+pub mod headless;
 pub mod manager;
 pub mod runner;
 
