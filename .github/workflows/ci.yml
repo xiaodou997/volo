@@ -61,3 +61,12 @@ jobs:
       - name: Rust tests
         working-directory: src-tauri
         run: cargo test --all-features
+
+      # Temporary dependency-lock capture for feature branches that add Rust crates.
+      # Removed before merge after the generated lockfile is committed.
+      - name: Upload generated Cargo.lock
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: cargo-lock-${{ github.sha }}
+          path: src-tauri/Cargo.lock
