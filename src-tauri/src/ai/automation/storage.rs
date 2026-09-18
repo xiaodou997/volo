@@ -416,7 +416,7 @@ pub fn claim_due_automations(dir: &Path, now: DateTime<Utc>) -> Result<Vec<DueAu
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ai::automation::AutomationTrigger;
+    use crate::ai::automation::{AutomationRetryPolicy, AutomationTrigger};
     use chrono::TimeZone;
 
     fn test_dir() -> PathBuf {
@@ -443,6 +443,21 @@ mod tests {
                 every_minutes: minutes,
             },
             retry_policy: None,
+        }
+    }
+
+    fn retry_automation(
+        id: &str,
+        minutes: u32,
+        max_retries: u32,
+        backoff_minutes: u32,
+    ) -> WorkflowAutomation {
+        WorkflowAutomation {
+            retry_policy: Some(AutomationRetryPolicy {
+                max_retries,
+                backoff_minutes,
+            }),
+            ..automation(id, minutes, true)
         }
     }
 
@@ -519,6 +534,7 @@ mod tests {
         assert_eq!(claimed.len(), 1);
         assert_eq!(claimed[0].automation.id, "job-1");
         assert_eq!(claimed[0].scheduled_for, at(12, 15));
+        assert_eq!(claimed[0].retry_attempt, None);
         assert_eq!(
             list_automations(&dir).unwrap()[0]
                 .parsed_next_run()
@@ -543,6 +559,119 @@ mod tests {
                 .unwrap(),
             Some(at(13, 0))
         );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn retry_failure_schedules_claims_and_stops_at_max_retries() {
+        let dir = test_dir();
+        save_automation(
+            &dir,
+            retry_automation("job-1", 15, 2, 1),
+            at(12, 0),
+        )
+        .unwrap();
+
+        let first = claim_due_automations(&dir, at(12, 15)).unwrap();
+        assert_eq!(first.len(), 1);
+        assert_eq!(first[0].retry_attempt, None);
+
+        let scheduled = schedule_retry_after_failure(&dir, &first[0], at(12, 15))
+            .unwrap()
+            .unwrap();
+        let retry = scheduled.retry_state.unwrap();
+        assert_eq!(retry.attempt, 1);
+        assert_eq!(retry.parsed_retry_at().unwrap(), at(12, 16));
+
+        let first_retry = claim_due_automations(&dir, at(12, 16)).unwrap();
+        assert_eq!(first_retry.len(), 1);
+        assert_eq!(first_retry[0].retry_attempt, Some(1));
+        assert!(list_automations(&dir).unwrap()[0].retry_state.is_none());
+
+        let scheduled = schedule_retry_after_failure(&dir, &first_retry[0], at(12, 16))
+            .unwrap()
+            .unwrap();
+        assert_eq!(scheduled.retry_state.unwrap().attempt, 2);
+
+        let second_retry = claim_due_automations(&dir, at(12, 17)).unwrap();
+        assert_eq!(second_retry.len(), 1);
+        assert_eq!(second_retry[0].retry_attempt, Some(2));
+        assert!(schedule_retry_after_failure(&dir, &second_retry[0], at(12, 17))
+            .unwrap()
+            .is_none());
+        assert!(list_automations(&dir).unwrap()[0].retry_state.is_none());
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn retry_never_crosses_the_next_regular_occurrence() {
+        let dir = test_dir();
+        save_automation(
+            &dir,
+            retry_automation("job-1", 15, 3, 20),
+            at(12, 0),
+        )
+        .unwrap();
+
+        let claim = claim_due_automations(&dir, at(12, 15)).unwrap();
+        assert_eq!(claim.len(), 1);
+        assert!(schedule_retry_after_failure(&dir, &claim[0], at(12, 15))
+            .unwrap()
+            .is_none());
+        assert!(list_automations(&dir).unwrap()[0].retry_state.is_none());
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn regular_schedule_supersedes_an_overdue_retry() {
+        let dir = test_dir();
+        save_automation(
+            &dir,
+            retry_automation("job-1", 15, 2, 1),
+            at(12, 0),
+        )
+        .unwrap();
+
+        let claim = claim_due_automations(&dir, at(12, 15)).unwrap();
+        schedule_retry_after_failure(&dir, &claim[0], at(12, 15))
+            .unwrap()
+            .unwrap();
+
+        // App sleeps past both retryAt=12:16 and nextRunAt=12:30. Only the normal
+        // occurrence is claimed; stale retry state is discarded.
+        let resumed = claim_due_automations(&dir, at(12, 31)).unwrap();
+        assert_eq!(resumed.len(), 1);
+        assert_eq!(resumed[0].retry_attempt, None);
+        assert_eq!(resumed[0].scheduled_for, at(12, 30));
+        let record = &list_automations(&dir).unwrap()[0];
+        assert!(record.retry_state.is_none());
+        assert_eq!(record.parsed_next_run().unwrap(), Some(at(12, 45)));
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn stale_execution_cannot_attach_retry_to_an_edited_definition() {
+        let dir = test_dir();
+        save_automation(
+            &dir,
+            retry_automation("job-1", 15, 2, 1),
+            at(12, 0),
+        )
+        .unwrap();
+        let claim = claim_due_automations(&dir, at(12, 15)).unwrap();
+
+        let mut edited = retry_automation("job-1", 30, 2, 1);
+        edited.workflow_id = "workflow-2".to_string();
+        save_automation(&dir, edited, at(12, 16)).unwrap();
+
+        assert!(schedule_retry_after_failure(&dir, &claim[0], at(12, 16))
+            .unwrap()
+            .is_none());
+        assert!(list_automations(&dir).unwrap()[0].retry_state.is_none());
+
         fs::remove_dir_all(dir).unwrap();
     }
 
