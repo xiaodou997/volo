@@ -3,7 +3,7 @@
 //! 与前台 Agent/Workflow 共享 ToolRegistry 与 MCP Registry，但权限语义固定为非交互：
 //! - builtin Tool 走 `ToolRegistry::execute_as_background`；
 //! - MCP Tool 走 `enforce_background` 后调用 MCP；
-//! - plugin Tool 依赖 renderer JS sandbox，MVP 明确拒绝后台执行。
+//! - plugin Tool 走嵌入式 QuickJS headless runtime；v1 支持纯 JS Tool，宿主 API 暂时明确拒绝。
 
 use std::future::Future;
 use std::pin::Pin;
@@ -12,17 +12,18 @@ use serde_json::Value;
 use tauri::AppHandle;
 
 use crate::core::permission::{enforce_background, PermissionEngine};
-use crate::error::{Result, VoloError};
+use crate::error::Result;
 
 use super::agent::ToolExecutor;
 use super::mcp::{McpRegistry, MCP_NAME_PREFIX};
+use super::plugin_headless;
 use super::plugin_tools::PLUGIN_NAME_PREFIX;
 use super::tools::ToolRegistry;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BackgroundToolRoute {
     Mcp,
-    PluginUnsupported,
+    PluginHeadless,
     Builtin,
 }
 
@@ -30,7 +31,7 @@ fn background_tool_route(name: &str) -> BackgroundToolRoute {
     if name.starts_with(MCP_NAME_PREFIX) {
         BackgroundToolRoute::Mcp
     } else if name.starts_with(PLUGIN_NAME_PREFIX) {
-        BackgroundToolRoute::PluginUnsupported
+        BackgroundToolRoute::PluginHeadless
     } else {
         BackgroundToolRoute::Builtin
     }
@@ -61,10 +62,15 @@ impl ToolExecutor for BackgroundToolExecutor<'_> {
                     enforce_background(self.engine, self.principal, &capability, Some(name))?;
                     self.mcp.call(name, args).await
                 }
-                BackgroundToolRoute::PluginUnsupported => Err(VoloError::Other(format!(
-                    "插件工具 '{}' 暂不支持后台执行；需要 headless plugin runtime",
-                    name
-                ))),
+                BackgroundToolRoute::PluginHeadless => {
+                    plugin_headless::execute_plugin_tool(
+                        self.app,
+                        self.principal,
+                        name,
+                        args,
+                    )
+                    .await
+                },
                 BackgroundToolRoute::Builtin => {
                     ToolRegistry::execute_as_background(
                         self.app,
@@ -93,10 +99,10 @@ mod tests {
     }
 
     #[test]
-    fn background_rejects_plugin_tool_route() {
+    fn background_routes_plugin_tool_to_headless_runtime() {
         assert_eq!(
             background_tool_route("plugin__demo__tool__hash"),
-            BackgroundToolRoute::PluginUnsupported
+            BackgroundToolRoute::PluginHeadless
         );
     }
 
