@@ -23,7 +23,7 @@ use tracing::warn;
 
 use crate::core::permission::PermissionEngine;
 use crate::error::{Result, VoloError};
-use crate::plugin::manager::PluginState;
+use crate::plugin::manager::{PluginState, ToolRuntime};
 
 use super::agent::ToolExecutor;
 use super::mcp::{McpRegistry, MCP_NAME_PREFIX};
@@ -197,7 +197,7 @@ pub fn collect_specs(plugins: &PluginState) -> Vec<ToolSpec> {
 
 /// 用完整 LLM 名反查 manifest 里的原始 plugin_id / tool_id。
 /// 不再依赖 sanitize 后的 id 反解，因此 sanitize 碰撞不会导致“命中第一个插件”。
-fn lookup_tool(plugins: &PluginState, llm_name: &str) -> Option<(String, String)> {
+pub(crate) fn lookup_tool(plugins: &PluginState, llm_name: &str) -> Option<(String, String)> {
     if !llm_name.starts_with(PLUGIN_NAME_PREFIX) {
         return None;
     }
@@ -330,6 +330,7 @@ mod tests {
             parameters: json!({ "type": "object", "properties": {} }),
             run: "tool.js".to_string(),
             icon: None,
+            runtime: ToolRuntime::Renderer,
         }
     }
 
