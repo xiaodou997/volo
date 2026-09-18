@@ -11,11 +11,16 @@ use tauri::{AppHandle, Manager};
 use crate::error::{Result, VoloError};
 
 use super::{
-    advance_next_run, initial_next_run, is_due, validate_automation, WorkflowAutomation,
+    advance_next_run, initial_next_run, is_due, retry_delay_seconds, validate_automation,
+    WorkflowAutomation,
 };
 
 const MAX_PERSISTED_AUTOMATION_ID_BYTES: usize = 128;
 static AUTOMATION_STORE_LOCK: Mutex<()> = Mutex::new(());
+
+fn is_zero(value: &u32) -> bool {
+    *value == 0
+}
 
 fn lock_store() -> Result<MutexGuard<'static, ()>> {
     AUTOMATION_STORE_LOCK
@@ -34,23 +39,34 @@ pub struct AutomationRecord {
     pub automation: WorkflowAutomation,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_run_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retry_at: Option<String>,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub retry_attempt: u32,
 }
 
 impl AutomationRecord {
-    pub fn parsed_next_run(&self) -> Result<Option<DateTime<Utc>>> {
-        self.next_run_at
-            .as_deref()
+    fn parse_runtime_time(value: Option<&str>, field: &str) -> Result<Option<DateTime<Utc>>> {
+        value
             .map(|value| {
                 DateTime::parse_from_rfc3339(value)
                     .map(|value| value.with_timezone(&Utc))
                     .map_err(|error| {
                         VoloError::Other(format!(
-                            "invalid automation nextRunAt '{}': {}",
-                            value, error
+                            "invalid automation {} '{}': {}",
+                            field, value, error
                         ))
                     })
             })
             .transpose()
+    }
+
+    pub fn parsed_next_run(&self) -> Result<Option<DateTime<Utc>>> {
+        Self::parse_runtime_time(self.next_run_at.as_deref(), "nextRunAt")
+    }
+
+    pub fn parsed_retry_at(&self) -> Result<Option<DateTime<Utc>>> {
+        Self::parse_runtime_time(self.retry_at.as_deref(), "retryAt")
     }
 }
 
@@ -60,6 +76,8 @@ impl AutomationRecord {
 pub struct DueAutomation {
     pub automation: WorkflowAutomation,
     pub scheduled_for: DateTime<Utc>,
+    pub attempt: u32,
+    pub is_retry: bool,
 }
 
 pub fn automations_dir(app: &AppHandle) -> Result<PathBuf> {
@@ -160,6 +178,7 @@ fn read_record(path: &Path) -> Result<AutomationRecord> {
     let record: AutomationRecord = serde_json::from_str(&content)?;
     validate_automation(&record.automation)?;
     record.parsed_next_run()?;
+    record.parsed_retry_at()?;
     Ok(record)
 }
 
@@ -214,26 +233,38 @@ pub fn save_automation(
     validate_automation(&automation)?;
     let existing = existing_record(dir, &automation.id)?;
 
+    let preserve_cadence = automation.enabled && existing.as_ref().is_some_and(|record| {
+        record.automation.enabled
+            && record.automation.workflow_id == automation.workflow_id
+            && record.automation.trigger == automation.trigger
+            && record.next_run_at.is_some()
+    });
+
     let next_run_at = if !automation.enabled {
         None
+    } else if preserve_cadence {
+        existing.as_ref().and_then(|record| record.next_run_at.clone())
     } else {
-        let preserve = existing.as_ref().is_some_and(|record| {
-            record.automation.enabled
-                && record.automation.workflow_id == automation.workflow_id
-                && record.automation.trigger == automation.trigger
-                && record.next_run_at.is_some()
-        });
+        Some(format_time(initial_next_run(&automation.trigger, now)?))
+    };
 
-        if preserve {
-            existing.and_then(|record| record.next_run_at)
-        } else {
-            Some(format_time(initial_next_run(&automation.trigger, now)?))
-        }
+    let preserve_retry = preserve_cadence && existing.as_ref().is_some_and(|record| {
+        record.automation.retry == automation.retry && record.retry_at.is_some()
+    });
+    let (retry_at, retry_attempt) = if preserve_retry {
+        existing
+            .as_ref()
+            .map(|record| (record.retry_at.clone(), record.retry_attempt))
+            .unwrap_or((None, 0))
+    } else {
+        (None, 0)
     };
 
     let record = AutomationRecord {
         automation,
         next_run_at,
+        retry_at,
+        retry_attempt,
     };
     write_record(dir, &record)?;
     Ok(record)
@@ -271,6 +302,47 @@ pub fn update_next_run(
     Ok(record)
 }
 
+/// 为一次失败执行安排下一次有限重试。
+///
+/// `attempt` 从 1 开始，1 表示原始 cadence 执行；返回 None 表示没有 retry policy、
+/// 已达到 maxRetries，或 Automation 已停用。重试采用指数退避并由核心策略封顶。
+pub fn schedule_retry(
+    dir: &Path,
+    automation_id: &str,
+    attempt: u32,
+    failed_at: DateTime<Utc>,
+) -> Result<Option<AutomationRecord>> {
+    let _guard = lock_store()?;
+    let mut record = existing_record(dir, automation_id)?
+        .ok_or_else(|| VoloError::NotFound(format!("automation: {}", automation_id)))?;
+
+    if !record.automation.enabled {
+        return Ok(None);
+    }
+    let Some(policy) = record.automation.retry.as_ref() else {
+        return Ok(None);
+    };
+
+    let retries_already_used = attempt.saturating_sub(1);
+    if retries_already_used >= policy.max_retries {
+        record.retry_at = None;
+        record.retry_attempt = 0;
+        write_record(dir, &record)?;
+        return Ok(None);
+    }
+
+    let retry_number = retries_already_used + 1;
+    let delay_seconds = retry_delay_seconds(policy, retry_number)?;
+    let retry_at = failed_at
+        .checked_add_signed(chrono::Duration::seconds(i64::from(delay_seconds)))
+        .ok_or_else(|| VoloError::Other("automation retry time overflow".to_string()))?;
+
+    record.retry_at = Some(format_time(retry_at));
+    record.retry_attempt = attempt.saturating_add(1);
+    write_record(dir, &record)?;
+    Ok(Some(record))
+}
+
 /// 原子 claim 当前到期的 enabled Automations：
 /// - 在同一把存储锁内重新读取最新 definition；
 /// - 对每个 due record 先推进并持久化 nextRunAt，再返回执行 claim；
@@ -283,6 +355,35 @@ pub fn claim_due_automations(dir: &Path, now: DateTime<Utc>) -> Result<Vec<DueAu
 
     for mut record in records {
         if !record.automation.enabled {
+            continue;
+        }
+
+        if let Some(retry_at) = record.parsed_retry_at()? {
+            // retry pending 时暂停新的 cadence occurrence，避免定时执行与重试并发/抢跑。
+            if !is_due(retry_at, now) {
+                continue;
+            }
+
+            let attempt = record.retry_attempt.max(2);
+            record.retry_at = None;
+            record.retry_attempt = 0;
+
+            // retry 期间如果正常 cadence 已经过期，同样按 skip-missed-runs 推进到未来，
+            // 避免重试成功后立刻又补跑一个旧 occurrence。
+            if let Some(next_run_at) = record.parsed_next_run()? {
+                if is_due(next_run_at, now) {
+                    let advanced =
+                        advance_next_run(&record.automation.trigger, next_run_at, now)?;
+                    record.next_run_at = Some(format_time(advanced));
+                }
+            }
+            write_record(dir, &record)?;
+            claimed.push(DueAutomation {
+                automation: record.automation,
+                scheduled_for: retry_at,
+                attempt,
+                is_retry: true,
+            });
             continue;
         }
 
@@ -303,6 +404,8 @@ pub fn claim_due_automations(dir: &Path, now: DateTime<Utc>) -> Result<Vec<DueAu
         claimed.push(DueAutomation {
             automation: record.automation,
             scheduled_for,
+            attempt: 1,
+            is_retry: false,
         });
     }
 
@@ -338,6 +441,7 @@ mod tests {
             trigger: AutomationTrigger::Interval {
                 every_minutes: minutes,
             },
+            retry: None,
         }
     }
 
@@ -414,6 +518,8 @@ mod tests {
         assert_eq!(claimed.len(), 1);
         assert_eq!(claimed[0].automation.id, "job-1");
         assert_eq!(claimed[0].scheduled_for, at(12, 15));
+        assert_eq!(claimed[0].attempt, 1);
+        assert!(!claimed[0].is_retry);
         assert_eq!(
             list_automations(&dir).unwrap()[0]
                 .parsed_next_run()
@@ -438,6 +544,69 @@ mod tests {
                 .unwrap(),
             Some(at(13, 0))
         );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn retry_pending_blocks_cadence_and_retry_claim_skips_missed_occurrence() {
+        use crate::ai::automation::AutomationRetryPolicy;
+
+        let dir = test_dir();
+        let mut definition = automation("job-1", 1, true);
+        definition.retry = Some(AutomationRetryPolicy {
+            max_retries: 2,
+            initial_delay_seconds: 120,
+        });
+        save_automation(&dir, definition, at(12, 0)).unwrap();
+
+        let first = claim_due_automations(&dir, at(12, 1)).unwrap();
+        assert_eq!(first.len(), 1);
+        assert_eq!(first[0].attempt, 1);
+
+        let retry = schedule_retry(&dir, "job-1", first[0].attempt, at(12, 1))
+            .unwrap()
+            .unwrap();
+        assert_eq!(retry.parsed_retry_at().unwrap(), Some(at(12, 3)));
+        assert_eq!(retry.retry_attempt, 2);
+
+        // 12:02 正常 cadence 已到，但 retry 尚未到：不允许新 occurrence 抢跑。
+        assert!(claim_due_automations(&dir, at(12, 2)).unwrap().is_empty());
+
+        let retried = claim_due_automations(&dir, at(12, 3)).unwrap();
+        assert_eq!(retried.len(), 1);
+        assert!(retried[0].is_retry);
+        assert_eq!(retried[0].attempt, 2);
+        assert_eq!(retried[0].scheduled_for, at(12, 3));
+
+        let state = list_automations(&dir).unwrap().remove(0);
+        assert_eq!(state.retry_at, None);
+        assert_eq!(state.retry_attempt, 0);
+        assert_eq!(state.parsed_next_run().unwrap(), Some(at(12, 4)));
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn retry_stops_after_configured_limit() {
+        use crate::ai::automation::AutomationRetryPolicy;
+
+        let dir = test_dir();
+        let mut definition = automation("job-1", 15, true);
+        definition.retry = Some(AutomationRetryPolicy {
+            max_retries: 1,
+            initial_delay_seconds: 30,
+        });
+        save_automation(&dir, definition, at(12, 0)).unwrap();
+
+        assert!(schedule_retry(&dir, "job-1", 1, at(12, 15))
+            .unwrap()
+            .is_some());
+        assert!(schedule_retry(&dir, "job-1", 2, at(12, 16))
+            .unwrap()
+            .is_none());
+
+        let state = list_automations(&dir).unwrap().remove(0);
+        assert_eq!(state.retry_at, None);
+        assert_eq!(state.retry_attempt, 0);
         fs::remove_dir_all(dir).unwrap();
     }
 
