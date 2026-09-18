@@ -50,6 +50,100 @@ impl Database {
             conn: Mutex::new(conn)
         })
     }
+
+    /// Internal namespaced DB primitives shared by Tauri commands and headless plugin Tools.
+    /// Permission checks remain the caller's responsibility; `namespace` is always the plugin id
+    /// for plugin calls so one plugin cannot read another plugin's documents.
+    pub(crate) fn put_for(
+        &self,
+        namespace: &str,
+        id: String,
+        data: serde_json::Value,
+    ) -> Result<Doc> {
+        let conn = self.conn.lock()
+            .map_err(|_| VoloError::Other("Database lock error".to_string()))?;
+
+        let full_id = make_id(namespace, &id);
+        let rev = uuid::Uuid::new_v4().to_string();
+        let data_str = serde_json::to_string(&data)?;
+        let updated_at = chrono::Utc::now().timestamp();
+
+        conn.execute(
+            "INSERT OR REPLACE INTO docs (id, plugin_id, rev, data, updated_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![full_id, namespace, &rev, data_str, updated_at],
+        )?;
+
+        Ok(Doc {
+            _id: id,
+            _rev: Some(rev),
+            data,
+            updated_at: Some(updated_at),
+        })
+    }
+
+    pub(crate) fn get_for(&self, namespace: &str, id: String) -> Result<Option<Doc>> {
+        let conn = self.conn.lock()
+            .map_err(|_| VoloError::Other("Database lock error".to_string()))?;
+
+        let full_id = make_id(namespace, &id);
+        let mut stmt = conn.prepare(
+            "SELECT id, rev, data, updated_at FROM docs WHERE id = ?1"
+        )?;
+
+        let result = stmt.query_row(params![full_id], |row| {
+            let full_id: String = row.get(0)?;
+            let original_id = full_id
+                .strip_prefix(&format!("{}:", namespace))
+                .unwrap_or(&full_id)
+                .to_string();
+
+            Ok(Doc {
+                _id: original_id,
+                _rev: row.get(1)?,
+                data: serde_json::from_str(&row.get::<_, String>(2)?)
+                    .unwrap_or(serde_json::Value::Null),
+                updated_at: row.get(3)?,
+            })
+        }).optional()?;
+
+        Ok(result)
+    }
+
+    pub(crate) fn remove_for(&self, namespace: &str, id: String) -> Result<()> {
+        let conn = self.conn.lock()
+            .map_err(|_| VoloError::Other("Database lock error".to_string()))?;
+
+        let full_id = make_id(namespace, &id);
+        conn.execute("DELETE FROM docs WHERE id = ?1", params![full_id])?;
+        Ok(())
+    }
+
+    pub(crate) fn all_for(&self, namespace: &str) -> Result<Vec<Doc>> {
+        let conn = self.conn.lock()
+            .map_err(|_| VoloError::Other("Database lock error".to_string()))?;
+
+        let mut stmt = conn.prepare(
+            "SELECT id, rev, data, updated_at FROM docs WHERE plugin_id = ?1 ORDER BY updated_at DESC"
+        )?;
+
+        let prefix = format!("{}:", namespace);
+        let docs = stmt.query_map(params![namespace], |row| {
+            let full_id: String = row.get(0)?;
+            let original_id = full_id.strip_prefix(&prefix).unwrap_or(&full_id).to_string();
+
+            Ok(Doc {
+                _id: original_id,
+                _rev: row.get(1)?,
+                data: serde_json::from_str(&row.get::<_, String>(2)?)
+                    .unwrap_or(serde_json::Value::Null),
+                updated_at: row.get(3)?,
+            })
+        })?
+        .filter_map(|doc| doc.ok())
+        .collect();
+
+        Ok(docs)
+    }
 }
 
 /// 生成带插件前缀的 ID
@@ -71,27 +165,8 @@ pub async fn db_put(
     require(&app, &engine, &plugins, plugin_id.as_deref(), "db.write", None).await?;
 
     // 分库 key 以验证后的身份为准；主窗口自用归入 "system"
-    let principal = plugin_id.as_deref().unwrap_or("system");
-
-    let conn = db.conn.lock()
-        .map_err(|_| VoloError::Other("Database lock error".to_string()))?;
-
-    let full_id = make_id(principal, &id);
-    let rev = uuid::Uuid::new_v4().to_string();
-    let data_str = serde_json::to_string(&data)?;
-    let updated_at = chrono::Utc::now().timestamp();
-
-    conn.execute(
-        "INSERT OR REPLACE INTO docs (id, plugin_id, rev, data, updated_at) VALUES (?1, ?2, ?3, ?4, ?5)",
-        params![full_id, principal, &rev, data_str, updated_at],
-    )?;
-
-    Ok(Doc {
-        _id: id,  // 返回原始 ID，不带前缀
-        _rev: Some(rev),
-        data,
-        updated_at: Some(updated_at),
-    })
+    let namespace = plugin_id.as_deref().unwrap_or("system");
+    db.put_for(namespace, id, data)
 }
 
 /// 获取文档
@@ -106,31 +181,8 @@ pub async fn db_get(
 ) -> Result<Option<Doc>> {
     require(&app, &engine, &plugins, plugin_id.as_deref(), "db.read", None).await?;
 
-    let principal = plugin_id.as_deref().unwrap_or("system");
-
-    let conn = db.conn.lock()
-        .map_err(|_| VoloError::Other("Database lock error".to_string()))?;
-
-    let full_id = make_id(principal, &id);
-
-    let mut stmt = conn.prepare(
-        "SELECT id, rev, data, updated_at FROM docs WHERE id = ?1"
-    )?;
-
-    let result = stmt.query_row(params![full_id], |row| {
-        // 从完整 ID 中提取原始 ID
-        let full_id: String = row.get(0)?;
-        let original_id = full_id.split(':').nth(1).unwrap_or(&full_id).to_string();
-
-        Ok(Doc {
-            _id: original_id,
-            _rev: row.get(1)?,
-            data: serde_json::from_str(&row.get::<_, String>(2)?).unwrap_or(serde_json::Value::Null),
-            updated_at: row.get(3)?,
-        })
-    }).optional()?;
-
-    Ok(result)
+    let namespace = plugin_id.as_deref().unwrap_or("system");
+    db.get_for(namespace, id)
 }
 
 /// 删除文档
@@ -145,15 +197,8 @@ pub async fn db_remove(
 ) -> Result<()> {
     require(&app, &engine, &plugins, plugin_id.as_deref(), "db.write", None).await?;
 
-    let principal = plugin_id.as_deref().unwrap_or("system");
-
-    let conn = db.conn.lock()
-        .map_err(|_| VoloError::Other("Database lock error".to_string()))?;
-
-    let full_id = make_id(principal, &id);
-    conn.execute("DELETE FROM docs WHERE id = ?1", params![full_id])?;
-
-    Ok(())
+    let namespace = plugin_id.as_deref().unwrap_or("system");
+    db.remove_for(namespace, id)
 }
 
 /// 获取插件所有文档
@@ -167,29 +212,44 @@ pub async fn db_all(
 ) -> Result<Vec<Doc>> {
     require(&app, &engine, &plugins, plugin_id.as_deref(), "db.read", None).await?;
 
-    let principal = plugin_id.as_deref().unwrap_or("system");
+    let namespace = plugin_id.as_deref().unwrap_or("system");
+    db.all_for(namespace)
+}
 
-    let conn = db.conn.lock()
-        .map_err(|_| VoloError::Other("Database lock error".to_string()))?;
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    let mut stmt = conn.prepare(
-        "SELECT id, rev, data, updated_at FROM docs WHERE plugin_id = ?1 ORDER BY updated_at DESC"
-    )?;
+    fn test_db() -> (Database, std::path::PathBuf) {
+        let path = std::env::temp_dir().join(format!(
+            "volo-database-test-{}.db",
+            uuid::Uuid::new_v4()
+        ));
+        (Database::new(&path).unwrap(), path)
+    }
 
-    let docs = stmt.query_map(params![principal], |row| {
-        // 从完整 ID 中提取原始 ID
-        let full_id: String = row.get(0)?;
-        let original_id = full_id.split(':').nth(1).unwrap_or(&full_id).to_string();
+    #[test]
+    fn namespaced_primitives_isolate_plugins_and_preserve_colons_in_ids() {
+        let (db, path) = test_db();
 
-        Ok(Doc {
-            _id: original_id,
-            _rev: row.get(1)?,
-            data: serde_json::from_str(&row.get::<_, String>(2)?).unwrap_or(serde_json::Value::Null),
-            updated_at: row.get(3)?,
-        })
-    })?
-    .filter_map(|d| d.ok())
-    .collect();
+        db.put_for("plugin-a", "item:one".to_string(), serde_json::json!({"owner":"a"}))
+            .unwrap();
+        db.put_for("plugin-b", "item:one".to_string(), serde_json::json!({"owner":"b"}))
+            .unwrap();
 
-    Ok(docs)
+        let a = db.get_for("plugin-a", "item:one".to_string()).unwrap().unwrap();
+        let b = db.get_for("plugin-b", "item:one".to_string()).unwrap().unwrap();
+        assert_eq!(a._id, "item:one");
+        assert_eq!(b._id, "item:one");
+        assert_eq!(a.data["owner"], "a");
+        assert_eq!(b.data["owner"], "b");
+
+        assert_eq!(db.all_for("plugin-a").unwrap().len(), 1);
+        db.remove_for("plugin-a", "item:one".to_string()).unwrap();
+        assert!(db.get_for("plugin-a", "item:one".to_string()).unwrap().is_none());
+        assert!(db.get_for("plugin-b", "item:one".to_string()).unwrap().is_some());
+
+        drop(db);
+        let _ = std::fs::remove_file(path);
+    }
 }

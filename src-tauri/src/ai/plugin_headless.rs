@@ -4,19 +4,24 @@
 //! plugin Tool JavaScript in an embedded QuickJS runtime with no DOM, network, filesystem or
 //! other host APIs exposed by default.
 //!
-//! v1 deliberately supports pure-compute Tool scripts only. Existing `rubick.*` host APIs
-//! are present as explicit rejections so a plugin fails fast instead of silently bypassing the
-//! background permission model. Host APIs can be added later through the same non-interactive
-//! permission path used by BackgroundToolExecutor.
+//! v2 keeps pure-compute Tool support and adds a deliberately small low-risk host surface:
+//! clipboard.writeText, notification.show, db.*, and storage.*. Every host call must be declared
+//! by the plugin manifest and is evaluated with the Workflow principal through the same
+//! non-interactive background permission path used by BackgroundToolExecutor. Medium/high-risk
+//! host APIs remain explicit rejections until Workflow-scoped grant acquisition is designed.
 
 use std::time::{Duration, Instant};
 
 use rquickjs::{Context, Function, Promise, Runtime};
 use serde_json::{json, Value};
 use tauri::{AppHandle, Manager};
+use tauri_plugin_clipboard_manager::ClipboardExt;
+use tauri_plugin_notification::NotificationExt;
 
+use crate::api::database::Database;
+use crate::core::permission::{enforce_background, PermissionEngine};
 use crate::error::{Result, VoloError};
-use crate::plugin::manager::PluginState;
+use crate::plugin::manager::{Plugin, PluginState};
 use crate::plugin::runner::resolve_run_source;
 
 use super::plugin_tools::lookup_tool;
@@ -28,6 +33,31 @@ const HEADLESS_TOOL_TIMEOUT: Duration = Duration::from_secs(30);
 const HEADLESS_SHIM: &str = r#"
 (function () {
   var toolCallback = null;
+
+  function call(name, args) {
+    var envelopeJson;
+    try {
+      envelopeJson = __voloHostCall(name, JSON.stringify(args || {}));
+    } catch (error) {
+      return Promise.reject(error);
+    }
+
+    var envelope;
+    try {
+      envelope = JSON.parse(envelopeJson);
+    } catch (error) {
+      return Promise.reject(new Error("invalid headless host response: " + error));
+    }
+
+    if (!envelope || envelope.ok !== true) {
+      return Promise.reject(new Error(
+        envelope && envelope.error
+          ? String(envelope.error)
+          : "headless host call failed: " + name
+      ));
+    }
+    return Promise.resolve(envelope.data);
+  }
 
   function unsupported(name) {
     return function () {
@@ -61,27 +91,48 @@ const HEADLESS_SHIM: &str = r#"
 
     clipboard: {
       readText: unsupported("clipboard.readText"),
-      writeText: unsupported("clipboard.writeText"),
+      writeText: function (text) {
+        return call("clipboard.writeText", { text: text });
+      },
       readImage: unsupported("clipboard.readImage"),
       writeImage: unsupported("clipboard.writeImage"),
       readFiles: unsupported("clipboard.readFiles")
     },
 
     db: {
-      put: unsupported("db.put"),
-      get: unsupported("db.get"),
-      remove: unsupported("db.remove"),
-      all: unsupported("db.all")
+      put: function (id, data) {
+        return call("db.put", { id: id, data: data });
+      },
+      get: function (id) {
+        return call("db.get", { id: id });
+      },
+      remove: function (id) {
+        return call("db.remove", { id: id });
+      },
+      all: function () {
+        return call("db.all", {});
+      }
     },
 
     storage: {
-      set: unsupported("storage.set"),
-      get: unsupported("storage.get"),
-      remove: unsupported("storage.remove")
+      set: function (key, value) {
+        return call("db.put", { id: key, data: value });
+      },
+      get: function (key) {
+        return call("db.get", { id: key }).then(function (doc) {
+          return doc && doc.data !== undefined ? doc.data : null;
+        });
+      },
+      remove: function (key) {
+        return call("db.remove", { id: key });
+      }
     },
 
     notification: {
-      show: unsupported("notification.show")
+      show: function (options) {
+        var opts = typeof options === "string" ? { body: options } : options;
+        return call("notification.show", { options: opts });
+      }
     },
 
     shell: {
@@ -161,11 +212,159 @@ const HEADLESS_SHIM: &str = r#"
 })();
 "#;
 
+
+#[derive(Clone)]
+struct HeadlessPluginHost {
+    app: AppHandle,
+    principal: String,
+    plugin_id: String,
+    permissions: Vec<String>,
+}
+
+impl HeadlessPluginHost {
+    fn new(app: AppHandle, principal: &str, plugin: &Plugin) -> Self {
+        Self {
+            app,
+            principal: principal.to_string(),
+            plugin_id: plugin.id.clone(),
+            permissions: plugin.permissions.clone(),
+        }
+    }
+
+    fn authorize(&self, capability: &str) -> Result<()> {
+        let engine = self.app.state::<PermissionEngine>();
+        if !PermissionEngine::declared(&self.permissions, capability, None) {
+            engine.audit(&self.principal, capability, None, "deny", None);
+            return Err(VoloError::PermissionDenied(format!(
+                "Plugin '{}' does not declare permission '{}'",
+                self.plugin_id, capability
+            )));
+        }
+
+        enforce_background(&engine, &self.principal, capability, None)
+    }
+
+    fn string_arg<'a>(args: &'a Value, name: &str, method: &str) -> Result<&'a str> {
+        args.get(name)
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                VoloError::Other(format!(
+                    "headless host method '{}' requires string argument '{}'",
+                    method, name
+                ))
+            })
+    }
+
+    fn call(&self, method: &str, args: Value) -> Result<Value> {
+        match method {
+            "clipboard.writeText" => {
+                self.authorize("clipboard.write")?;
+                let text = Self::string_arg(&args, "text", method)?;
+                self.app
+                    .clipboard()
+                    .write_text(text)
+                    .map_err(|error| VoloError::Other(format!("Clipboard write failed: {}", error)))?;
+                Ok(Value::Null)
+            }
+            "notification.show" => {
+                self.authorize("notification.show")?;
+                let options = args
+                    .get("options")
+                    .and_then(Value::as_object)
+                    .ok_or_else(|| {
+                        VoloError::Other(
+                            "headless host notification.show requires options object".to_string(),
+                        )
+                    })?;
+                let body = options
+                    .get("body")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| {
+                        VoloError::Other(
+                            "headless host notification.show requires options.body".to_string(),
+                        )
+                    })?;
+                let title = options
+                    .get("title")
+                    .and_then(Value::as_str)
+                    .unwrap_or("Volo");
+
+                self.app
+                    .notification()
+                    .builder()
+                    .title(title)
+                    .body(body)
+                    .show()
+                    .map_err(|error| VoloError::Other(format!("Notification failed: {}", error)))?;
+                Ok(Value::Null)
+            }
+            "db.put" => {
+                self.authorize("db.write")?;
+                let id = Self::string_arg(&args, "id", method)?.to_string();
+                let data = args.get("data").cloned().unwrap_or(Value::Null);
+                let db = self.app.state::<Database>();
+                Ok(serde_json::to_value(db.put_for(&self.plugin_id, id, data)?)?)
+            }
+            "db.get" => {
+                self.authorize("db.read")?;
+                let id = Self::string_arg(&args, "id", method)?.to_string();
+                let db = self.app.state::<Database>();
+                Ok(serde_json::to_value(db.get_for(&self.plugin_id, id)?)?)
+            }
+            "db.remove" => {
+                self.authorize("db.write")?;
+                let id = Self::string_arg(&args, "id", method)?.to_string();
+                let db = self.app.state::<Database>();
+                db.remove_for(&self.plugin_id, id)?;
+                Ok(Value::Null)
+            }
+            "db.all" => {
+                self.authorize("db.read")?;
+                let db = self.app.state::<Database>();
+                Ok(serde_json::to_value(db.all_for(&self.plugin_id)?)?)
+            }
+            _ => Err(VoloError::Other(format!(
+                "headless plugin host API is not supported yet: {}",
+                method
+            ))),
+        }
+    }
+
+    fn call_envelope(&self, method: String, args_json: String) -> String {
+        let result = serde_json::from_str::<Value>(&args_json)
+            .map_err(VoloError::from)
+            .and_then(|args| self.call(&method, args));
+
+        match result {
+            Ok(data) => serde_json::to_string(&json!({
+                "ok": true,
+                "data": data
+            }))
+            .unwrap_or_else(|error| format!(
+                "{{\"ok\":false,\"error\":\"serialize host response failed: {}\"}}",
+                error
+            )),
+            Err(error) => serde_json::to_string(&json!({
+                "ok": false,
+                "error": error.to_string()
+            }))
+            .unwrap_or_else(|_| {
+                "{\"ok\":false,\"error\":\"headless host call failed\"}".to_string()
+            }),
+        }
+    }
+}
+
 fn js_error(context: &str, error: impl std::fmt::Display) -> VoloError {
     VoloError::Other(format!("{}: {}", context, error))
 }
 
-fn execute_source_sync(source: String, args: Value, timeout: Duration) -> Result<Value> {
+fn execute_source_sync(
+    source: String,
+    args: Value,
+    timeout: Duration,
+    host: Option<HeadlessPluginHost>,
+) -> Result<Value> {
     let runtime =
         Runtime::new().map_err(|error| js_error("create headless QuickJS runtime", error))?;
     runtime.set_memory_limit(HEADLESS_MEMORY_LIMIT);
@@ -183,6 +382,24 @@ fn execute_source_sync(source: String, args: Value, timeout: Duration) -> Result
             let uuid_fn = Function::new(ctx.clone(), || uuid::Uuid::new_v4().to_string())?
                 .with_name("randomUUID")?;
             ctx.globals().set("__voloRandomUuid", uuid_fn)?;
+
+            let host_fn = Function::new(ctx.clone(), move |method: String, args_json: String| {
+                match &host {
+                    Some(host) => host.call_envelope(method, args_json),
+                    None => serde_json::to_string(&json!({
+                        "ok": false,
+                        "error": format!(
+                            "headless plugin host API is unavailable in pure runtime: {}",
+                            method
+                        )
+                    }))
+                    .unwrap_or_else(|_| {
+                        "{\"ok\":false,\"error\":\"headless host API unavailable\"}".to_string()
+                    }),
+                }
+            })?
+            .with_name("hostCall")?;
+            ctx.globals().set("__voloHostCall", host_fn)?;
 
             ctx.eval::<(), _>(HEADLESS_SHIM)?;
             ctx.eval::<(), _>(source)?;
@@ -211,22 +428,23 @@ async fn execute_source_with_timeout(
     source: &str,
     args: Value,
     timeout: Duration,
+    host: Option<HeadlessPluginHost>,
 ) -> Result<Value> {
     let source = source.to_string();
-    tokio::task::spawn_blocking(move || execute_source_sync(source, args, timeout))
+    tokio::task::spawn_blocking(move || execute_source_sync(source, args, timeout, host))
         .await
         .map_err(|error| VoloError::Other(format!("headless plugin worker failed: {}", error)))?
 }
 
 pub async fn execute_source(source: &str, args: Value) -> Result<Value> {
-    execute_source_with_timeout(source, args, HEADLESS_TOOL_TIMEOUT).await
+    execute_source_with_timeout(source, args, HEADLESS_TOOL_TIMEOUT, None).await
 }
 
 /// Resolve an LLM plugin-tool name to the installed, enabled plugin and execute its source
 /// without a renderer/WebView dependency.
 pub async fn execute_plugin_tool(
     app: &AppHandle,
-    _principal: &str,
+    principal: &str,
     llm_name: &str,
     args: Value,
 ) -> Result<Value> {
@@ -253,7 +471,8 @@ pub async fn execute_plugin_tool(
         ))
     })?;
 
-    execute_source(&source, args).await
+    let host = HeadlessPluginHost::new(app.clone(), principal, &plugin);
+    execute_source_with_timeout(&source, args, HEADLESS_TOOL_TIMEOUT, Some(host)).await
 }
 
 #[cfg(test)]
@@ -322,6 +541,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn pure_runtime_does_not_silently_enable_supported_host_calls() {
+        let source = r#"
+            rubick.tool.onInvoke(async function () {
+              await rubick.clipboard.writeText("secret");
+              return { ok: true };
+            });
+        "#;
+
+        let error = execute_source(source, json!({})).await.unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("headless plugin host API is unavailable in pure runtime: clipboard.writeText"));
+    }
+
+    #[test]
+    fn low_risk_host_method_capabilities_match_existing_plugin_contract() {
+        assert_eq!(
+            PermissionEngine::declared(&["clipboard.write".to_string()], "clipboard.write", None),
+            true
+        );
+        assert_eq!(
+            PermissionEngine::declared(&["notification.show".to_string()], "notification.show", None),
+            true
+        );
+        assert_eq!(
+            PermissionEngine::declared(&["db.read".to_string()], "db.read", None),
+            true
+        );
+        assert_eq!(
+            PermissionEngine::declared(&["db.write".to_string()], "db.write", None),
+            true
+        );
+    }
+
+    #[tokio::test]
     async fn unresolved_promise_fails_instead_of_hanging_scheduler() {
         let source = r#"
             rubick.tool.onInvoke(function () {
@@ -329,7 +583,7 @@ mod tests {
             });
         "#;
 
-        let error = execute_source_with_timeout(source, json!({}), Duration::from_millis(30))
+        let error = execute_source_with_timeout(source, json!({}), Duration::from_millis(30), None)
             .await
             .unwrap_err();
         assert!(error.to_string().contains("execute headless plugin tool"));
