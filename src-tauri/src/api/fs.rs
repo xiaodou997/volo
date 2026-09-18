@@ -55,7 +55,7 @@ fn absolute_plugin_path(input: &str) -> Result<PathBuf> {
 }
 
 /// 规范化一个必须存在的插件路径，并解析最终符号链接。
-fn canonicalize_existing_plugin_path(input: &str) -> Result<PathBuf> {
+pub(crate) fn canonicalize_existing_plugin_path(input: &str) -> Result<PathBuf> {
     let path = absolute_plugin_path(input)?;
     std::fs::canonicalize(&path).map_err(|e| {
         VoloError::Other(format!(
