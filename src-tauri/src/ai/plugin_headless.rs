@@ -4,8 +4,8 @@
 //! plugin Tool JavaScript in an embedded QuickJS runtime with no DOM, network, filesystem or
 //! other host APIs exposed by default.
 //!
-//! v3 keeps pure-compute Tool support and the low-risk host surface, and adds clipboard.readText
-//! as the first Medium-risk headless API. Every host call must be declared by the plugin manifest
+//! v4 keeps pure-compute Tool support and the low-risk host surface, and adds non-interactive
+//! clipboard.readText plus screenCapture as Medium-risk headless APIs. Every host call must be declared by the plugin manifest
 //! and is evaluated with the Workflow principal through the same non-interactive background
 //! permission path used by BackgroundToolExecutor. Medium/high-risk APIs require a Workflow-scoped
 //! Always grant before unattended execution; unsupported host APIs still fail fast.
@@ -156,7 +156,9 @@ const HEADLESS_SHIM: &str = r#"
       pickFolder: unsupported("fs.pickFolder")
     },
 
-    screenCapture: unsupported("screenCapture"),
+    screenCapture: function () {
+      return call("screen.capture", {});
+    },
     screenCaptureArea: unsupported("screenCaptureArea"),
 
     window: {
@@ -266,6 +268,10 @@ impl HeadlessPluginHost {
                     .read_text()
                     .map(Value::String)
                     .map_err(|error| VoloError::Other(format!("Clipboard read failed: {}", error)))
+            }
+            "screen.capture" => {
+                self.authorize("screen.capture")?;
+                crate::api::screen::capture_screen_image().map(Value::String)
             }
             "clipboard.writeText" => {
                 self.authorize("clipboard.write")?;
@@ -537,17 +543,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn unsupported_host_api_fails_fast_instead_of_using_renderer() {
+    async fn interactive_screen_capture_area_stays_unsupported_in_headless_mode() {
         let source = r#"
             rubick.tool.onInvoke(async function () {
-              return await rubick.screenCapture();
+              return await rubick.screenCaptureArea();
             });
         "#;
 
         let error = execute_source(source, json!({})).await.unwrap_err();
         assert!(error
             .to_string()
-            .contains("headless plugin host API is not supported yet: screenCapture"));
+            .contains("headless plugin host API is not supported yet: screenCaptureArea"));
     }
 
     #[tokio::test]
@@ -569,6 +575,11 @@ mod tests {
         assert!(PermissionEngine::declared(
             &["clipboard.read".to_string()],
             "clipboard.read",
+            None
+        ));
+        assert!(PermissionEngine::declared(
+            &["screen.capture".to_string()],
+            "screen.capture",
             None
         ));
         assert_eq!(
