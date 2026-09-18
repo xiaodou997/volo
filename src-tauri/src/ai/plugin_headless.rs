@@ -4,8 +4,9 @@
 //! plugin Tool JavaScript in an embedded QuickJS runtime with no DOM, network, filesystem or
 //! other host APIs exposed by default.
 //!
-//! v4 keeps pure-compute Tool support and the low-risk host surface, and adds non-interactive
-//! clipboard.readText plus screenCapture as Medium-risk headless APIs. Every host call must be declared by the plugin manifest
+//! v5 keeps pure-compute Tool support and the low-risk host surface, and adds non-interactive
+//! clipboard.readText, screenCapture, and fs.read as Medium-risk headless APIs. Every host call
+//! must be declared by the plugin manifest
 //! and is evaluated with the Workflow principal through the same non-interactive background
 //! permission path used by BackgroundToolExecutor. Medium/high-risk APIs require a Workflow-scoped
 //! Always grant before unattended execution; unsupported host APIs still fail fast.
@@ -143,7 +144,9 @@ const HEADLESS_SHIM: &str = r#"
     },
 
     fs: {
-      read: unsupported("fs.read"),
+      read: function (path) {
+        return call("fs.read", { path: path });
+      },
       readBinary: unsupported("fs.readBinary"),
       write: unsupported("fs.write"),
       writeBinary: unsupported("fs.writeBinary"),
@@ -235,17 +238,21 @@ impl HeadlessPluginHost {
         }
     }
 
-    fn authorize(&self, capability: &str) -> Result<()> {
+    fn authorize_resource(&self, capability: &str, resource: Option<&str>) -> Result<()> {
         let engine = self.app.state::<PermissionEngine>();
-        if !PermissionEngine::declared(&self.permissions, capability, None) {
-            engine.audit(&self.principal, capability, None, "deny", None);
+        if !PermissionEngine::declared(&self.permissions, capability, resource) {
+            engine.audit(&self.principal, capability, resource, "deny", None);
             return Err(VoloError::PermissionDenied(format!(
-                "Plugin '{}' does not declare permission '{}'",
-                self.plugin_id, capability
+                "Plugin '{}' does not declare permission '{}' for resource {:?}",
+                self.plugin_id, capability, resource
             )));
         }
 
-        enforce_background(&engine, &self.principal, capability, None)
+        enforce_background(&engine, &self.principal, capability, resource)
+    }
+
+    fn authorize(&self, capability: &str) -> Result<()> {
+        self.authorize_resource(capability, None)
     }
 
     fn string_arg<'a>(args: &'a Value, name: &str, method: &str) -> Result<&'a str> {
@@ -272,6 +279,21 @@ impl HeadlessPluginHost {
             "screen.capture" => {
                 self.authorize("screen.capture")?;
                 crate::api::screen::capture_screen_image().map(Value::String)
+            }
+            "fs.read" => {
+                let path = Self::string_arg(&args, "path", method)?;
+                let resolved = crate::api::fs::canonicalize_existing_plugin_path(path)?;
+                let resource = resolved.to_string_lossy();
+                self.authorize_resource("fs.read", Some(resource.as_ref()))?;
+                std::fs::read_to_string(&resolved)
+                    .map(Value::String)
+                    .map_err(|error| {
+                        VoloError::Other(format!(
+                            "Failed to read headless plugin file '{}': {}",
+                            resolved.display(),
+                            error
+                        ))
+                    })
             }
             "clipboard.writeText" => {
                 self.authorize("clipboard.write")?;
@@ -582,6 +604,16 @@ mod tests {
             "screen.capture",
             None
         ));
+        assert!(PermissionEngine::declared(
+            &["fs.read:/tmp/**".to_string()],
+            "fs.read",
+            Some("/tmp/nested/input.txt")
+        ));
+        assert!(!PermissionEngine::declared(
+            &["fs.read:/tmp/**".to_string()],
+            "fs.read",
+            Some("/etc/passwd")
+        ));
         assert_eq!(
             PermissionEngine::declared(&["clipboard.write".to_string()], "clipboard.write", None),
             true
@@ -598,6 +630,20 @@ mod tests {
             PermissionEngine::declared(&["db.write".to_string()], "db.write", None),
             true
         );
+    }
+
+    #[tokio::test]
+    async fn pure_runtime_does_not_enable_fs_read_without_an_authorized_host() {
+        let source = r#"
+            rubick.tool.onInvoke(async function () {
+              return await rubick.fs.read("/tmp/input.txt");
+            });
+        "#;
+
+        let error = execute_source(source, json!({})).await.unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("headless plugin host API is unavailable in pure runtime: fs.read"));
     }
 
     #[tokio::test]
