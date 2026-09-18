@@ -7,7 +7,7 @@
 pub(crate) mod commands;
 pub(crate) mod scheduler;
 mod storage;
-pub use storage::AutomationRecord;
+pub use storage::{AutomationRecord, AutomationRetryState};
 
 use chrono::{
     DateTime, Duration, Local, LocalResult, NaiveDate, NaiveDateTime, TimeZone, Utc,
@@ -18,6 +18,8 @@ use crate::error::{Result, VoloError};
 
 const MAX_AUTOMATION_ID_LEN: usize = 128;
 const MAX_INTERVAL_MINUTES: u32 = 525_600; // 1 year
+const MAX_AUTOMATION_RETRIES: u32 = 10;
+const MAX_RETRY_BACKOFF_MINUTES: u32 = 1_440;
 const DAILY_DST_SEARCH_MINUTES: i64 = 180;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -27,6 +29,33 @@ pub struct WorkflowAutomation {
     pub workflow_id: String,
     pub enabled: bool,
     pub trigger: AutomationTrigger,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_policy: Option<AutomationRetryPolicy>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AutomationRetryPolicy {
+    pub max_retries: u32,
+    pub backoff_minutes: u32,
+}
+
+impl AutomationRetryPolicy {
+    fn validate(&self) -> Result<()> {
+        if self.max_retries == 0 || self.max_retries > MAX_AUTOMATION_RETRIES {
+            return Err(VoloError::Other(format!(
+                "automation maxRetries 必须在 1..={} 之间",
+                MAX_AUTOMATION_RETRIES
+            )));
+        }
+        if self.backoff_minutes == 0 || self.backoff_minutes > MAX_RETRY_BACKOFF_MINUTES {
+            return Err(VoloError::Other(format!(
+                "automation retry backoffMinutes 必须在 1..={} 分钟之间",
+                MAX_RETRY_BACKOFF_MINUTES
+            )));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -84,7 +113,11 @@ pub fn validate_automation(automation: &WorkflowAutomation) -> Result<()> {
         return Err(VoloError::Other("automation workflowId 不能为空".to_string()));
     }
 
-    automation.trigger.validate()
+    automation.trigger.validate()?;
+    if let Some(policy) = &automation.retry_policy {
+        policy.validate()?;
+    }
+    Ok(())
 }
 
 fn interval_seconds(every_minutes: u32) -> Result<i64> {
@@ -263,6 +296,7 @@ mod tests {
             workflow_id: "clipboard-notify".to_string(),
             enabled: true,
             trigger: interval(15),
+            retry_policy: None,
         };
 
         assert_eq!(
@@ -283,6 +317,7 @@ mod tests {
             workflow_id: "clipboard-notify".to_string(),
             enabled: true,
             trigger: daily(9, 30),
+            retry_policy: None,
         };
         assert_eq!(
             serde_json::to_value(&daily_automation).unwrap(),
@@ -306,6 +341,7 @@ mod tests {
             workflow_id: "workflow-1".to_string(),
             enabled: true,
             trigger: interval(15),
+            retry_policy: None,
         };
         assert!(validate_automation(&valid).is_ok());
 
@@ -326,6 +362,45 @@ mod tests {
         assert!(validate_automation(&invalid).is_err());
         invalid.trigger = daily(23, 60);
         assert!(validate_automation(&invalid).is_err());
+
+        let mut invalid_retry = WorkflowAutomation {
+            id: "retry-job".to_string(),
+            workflow_id: "workflow-1".to_string(),
+            enabled: true,
+            trigger: interval(15),
+            retry_policy: Some(AutomationRetryPolicy {
+                max_retries: 0,
+                backoff_minutes: 1,
+            }),
+        };
+        assert!(validate_automation(&invalid_retry).is_err());
+        invalid_retry.retry_policy = Some(AutomationRetryPolicy {
+            max_retries: 2,
+            backoff_minutes: 0,
+        });
+        assert!(validate_automation(&invalid_retry).is_err());
+    }
+
+    #[test]
+    fn retry_policy_serializes_only_when_enabled() {
+        let automation = WorkflowAutomation {
+            id: "retry-job".to_string(),
+            workflow_id: "workflow-1".to_string(),
+            enabled: true,
+            trigger: interval(15),
+            retry_policy: Some(AutomationRetryPolicy {
+                max_retries: 2,
+                backoff_minutes: 3,
+            }),
+        };
+
+        assert_eq!(
+            serde_json::to_value(&automation).unwrap()["retryPolicy"],
+            json!({
+                "maxRetries": 2,
+                "backoffMinutes": 3
+            })
+        );
     }
 
     #[test]
