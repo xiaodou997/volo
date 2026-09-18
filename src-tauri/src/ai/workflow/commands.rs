@@ -189,9 +189,11 @@ pub(crate) async fn run_workflow_background(
     mcp.connect_all(&app_config.mcp_servers).await;
 
     let engine = app.state::<PermissionEngine>();
+    let plugins = app.state::<PluginState>();
     let executor = BackgroundToolExecutor {
         app: &app,
         engine: &engine,
+        plugins: &plugins,
         mcp: &mcp,
         principal: &principal,
     };
