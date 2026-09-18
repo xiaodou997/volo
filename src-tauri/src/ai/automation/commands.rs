@@ -3,6 +3,7 @@ use tauri::{AppHandle, Manager};
 
 use crate::core::capability::{capability_meta, RiskLevel};
 use crate::core::permission::{enforce_background, PermissionEngine};
+use crate::ai::tools::ToolRegistry;
 use crate::error::{Result, VoloError};
 
 use super::{preflight, storage, AutomationRecord, WorkflowAutomation};
@@ -24,6 +25,27 @@ fn normalize_background_resource(
         })?;
         let resolved = crate::api::fs::canonicalize_creation_plugin_path(path)?;
         return Ok(Some(resolved.to_string_lossy().into_owned()));
+    }
+
+    if matches!(capability, "fs.write" | "shell.open") {
+        let value = resource.as_deref().ok_or_else(|| {
+            VoloError::Other(format!(
+                "Background {} grant requires an exact resource",
+                capability
+            ))
+        })?;
+        return Ok(Some(ToolRegistry::expand_tilde(value)));
+    }
+
+    if let Some(tool_name) = capability.strip_prefix("mcp.call:") {
+        let resource = resource.unwrap_or_else(|| tool_name.to_string());
+        if resource != tool_name {
+            return Err(VoloError::Other(format!(
+                "MCP background grant resource must match capability tool '{}'",
+                tool_name
+            )));
+        }
+        return Ok(Some(resource));
     }
 
     Ok(resource)
