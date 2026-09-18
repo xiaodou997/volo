@@ -5,18 +5,22 @@
 //! - storage 在 claim 时先推进 nextRunAt，避免同一 occurrence 重复执行；
 //! - missed occurrences 不补跑；
 //! - due jobs 逐个执行，保持简单可预测；
-//! - Workflow 执行失败只记录日志/History，不触发即时 retry；
+//! - 未配置 retryPolicy 时保持原行为；配置后按固定 backoff 重试，且 retry 不跨过下一次正常 schedule；
 //! - 缺失 Workflow 不会阻断 scheduler，下一周期仍会继续尝试。
 
+use std::path::Path;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use tauri::AppHandle;
 
 use crate::ai::workflow::commands::{load_saved_workflow, run_workflow_background};
+use crate::ai::workflow::WorkflowExecutionStatus;
 use crate::error::Result;
 
-use super::storage::{automations_dir, claim_due_automations, DueAutomation};
+use super::storage::{
+    automations_dir, claim_due_automations, schedule_retry_after_failure, DueAutomation,
+};
 
 const SCHEDULER_TICK: Duration = Duration::from_secs(15);
 
@@ -45,16 +49,40 @@ pub(crate) async fn tick(app: &AppHandle, now: DateTime<Utc>) -> Result<usize> {
     let claimed_count = claimed.len();
 
     for claim in claimed {
-        execute_claim(app, claim).await;
+        execute_claim(app, &dir, claim).await;
     }
 
     Ok(claimed_count)
 }
 
-async fn execute_claim(app: &AppHandle, claim: DueAutomation) {
+fn schedule_retry(dir: &Path, claim: &DueAutomation) {
+    match schedule_retry_after_failure(dir, claim, Utc::now()) {
+        Ok(Some(record)) => {
+            if let Some(retry) = record.retry_state {
+                tracing::info!(
+                    automation_id = %claim.automation.id,
+                    retry_attempt = retry.attempt,
+                    retry_at = %retry.retry_at,
+                    "automation retry scheduled"
+                );
+            }
+        }
+        Ok(None) => {}
+        Err(error) => {
+            tracing::warn!(
+                automation_id = %claim.automation.id,
+                "failed to persist automation retry state: {}",
+                error
+            );
+        }
+    }
+}
+
+async fn execute_claim(app: &AppHandle, dir: &Path, claim: DueAutomation) {
     let automation_id = claim.automation.id.clone();
     let workflow_id = claim.automation.workflow_id.clone();
     let scheduled_for = claim.scheduled_for;
+    let retry_attempt = claim.retry_attempt;
 
     let workflow = match load_saved_workflow(app, &workflow_id) {
         Ok(workflow) => workflow,
@@ -63,19 +91,25 @@ async fn execute_claim(app: &AppHandle, claim: DueAutomation) {
                 automation_id = %automation_id,
                 workflow_id = %workflow_id,
                 scheduled_for = %scheduled_for,
+                retry_attempt = ?retry_attempt,
                 "automation skipped because workflow could not be loaded: {}",
                 error
             );
+            schedule_retry(dir, &claim);
             return;
         }
     };
 
     match run_workflow_background(app.clone(), workflow, None).await {
         Ok(execution) => {
+            if execution.status == WorkflowExecutionStatus::Failed {
+                schedule_retry(dir, &claim);
+            }
             tracing::info!(
                 automation_id = %automation_id,
                 workflow_id = %workflow_id,
                 scheduled_for = %scheduled_for,
+                retry_attempt = ?retry_attempt,
                 status = ?execution.status,
                 "automation workflow run finished"
             );
@@ -85,9 +119,11 @@ async fn execute_claim(app: &AppHandle, claim: DueAutomation) {
                 automation_id = %automation_id,
                 workflow_id = %workflow_id,
                 scheduled_for = %scheduled_for,
+                retry_attempt = ?retry_attempt,
                 "automation workflow run failed before execution completed: {}",
                 error
             );
+            schedule_retry(dir, &claim);
         }
     }
 }
@@ -176,6 +212,7 @@ mod tests {
             trigger: AutomationTrigger::Interval {
                 every_minutes: 15,
             },
+            retry_policy: None,
         };
         save_automation(&automations_dir, automation, at(12, 0)).unwrap();
 
