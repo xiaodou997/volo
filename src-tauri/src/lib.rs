@@ -126,7 +126,7 @@ pub fn run() {
             // 权限
             core::permission::permission_respond,
             core::permission::permission_list_grants,
-            core::permission::permission_request_workflow_always,
+            ai::automation::commands::permission_request_workflow_always,
             core::permission::permission_revoke,
             // 搜索
             search::app_search::search,
