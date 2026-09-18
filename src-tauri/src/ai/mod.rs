@@ -8,6 +8,7 @@ pub mod automation;
 pub mod background_tools;
 pub mod llm;
 pub mod mcp;
+pub mod plugin_headless;
 pub mod plugin_tools;
 pub mod session;
 pub mod skill;
