@@ -181,6 +181,42 @@ mod tests {
             None
         );
     }
+
+    #[test]
+    fn resource_bound_grants_normalize_like_runtime_execution() {
+        let home = dirs::home_dir().unwrap();
+        assert_eq!(
+            normalize_background_resource(
+                "fs.write",
+                Some("~/Documents/output.txt".to_string()),
+            )
+            .unwrap(),
+            Some(home.join("Documents/output.txt").to_string_lossy().into_owned())
+        );
+
+        assert_eq!(
+            normalize_background_resource(
+                "shell.open",
+                Some("https://example.com/path".to_string()),
+            )
+            .unwrap(),
+            Some("https://example.com/path".to_string())
+        );
+    }
+
+    #[test]
+    fn mcp_background_resource_defaults_to_exact_tool_and_rejects_mismatch() {
+        let capability = "mcp.call:mcp__server__tool";
+        assert_eq!(
+            normalize_background_resource(capability, None).unwrap(),
+            Some("mcp__server__tool".to_string())
+        );
+        assert!(normalize_background_resource(
+            capability,
+            Some("mcp__other__tool".to_string()),
+        )
+        .is_err());
+    }
 }
 
 
