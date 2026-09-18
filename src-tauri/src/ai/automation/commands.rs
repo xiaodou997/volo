@@ -23,6 +23,12 @@ fn normalize_background_resource(
             )
         })?;
         let resolved = crate::api::fs::canonicalize_existing_plugin_path(path)?;
+        if !resolved.is_file() {
+            return Err(VoloError::Other(format!(
+                "Background fs.read grant requires a file resource: {}",
+                resolved.display()
+            )));
+        }
         return Ok(Some(resolved.to_string_lossy().into_owned()));
     }
 
