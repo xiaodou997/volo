@@ -84,6 +84,7 @@ pub fn run() {
             ai::automation::commands::automation_list,
             ai::automation::commands::automation_save,
             ai::automation::commands::automation_delete,
+            ai::automation::commands::automation_permission_preflight,
             // Skill
             ai::skill::skill_list,
             ai::skill::skill_install_from_dir,
