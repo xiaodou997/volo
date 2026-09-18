@@ -11,7 +11,7 @@
 
 use std::time::{Duration, Instant};
 
-use rquickjs::{AsyncContext, AsyncRuntime, Function, Promise};
+use rquickjs::{Context, Function, Promise, Runtime};
 use serde_json::{json, Value};
 use tauri::{AppHandle, Manager};
 
@@ -165,47 +165,32 @@ fn js_error(context: &str, error: impl std::fmt::Display) -> VoloError {
     VoloError::Other(format!("{}: {}", context, error))
 }
 
-async fn execute_source_with_timeout(
-    source: &str,
-    args: Value,
-    timeout: Duration,
-) -> Result<Value> {
+fn execute_source_sync(source: String, args: Value, timeout: Duration) -> Result<Value> {
     let runtime =
-        AsyncRuntime::new().map_err(|error| js_error("create headless QuickJS runtime", error))?;
-    runtime.set_memory_limit(HEADLESS_MEMORY_LIMIT).await;
-    runtime.set_max_stack_size(HEADLESS_STACK_LIMIT).await;
+        Runtime::new().map_err(|error| js_error("create headless QuickJS runtime", error))?;
+    runtime.set_memory_limit(HEADLESS_MEMORY_LIMIT);
+    runtime.set_max_stack_size(HEADLESS_STACK_LIMIT);
 
     let deadline = Instant::now() + timeout;
-    runtime
-        .set_interrupt_handler(Some(Box::new(move || Instant::now() >= deadline)))
-        .await;
+    runtime.set_interrupt_handler(Some(Box::new(move || Instant::now() >= deadline)));
 
-    let context = AsyncContext::full(&runtime)
-        .await
-        .map_err(|error| js_error("create headless QuickJS context", error))?;
-
-    let source = source.to_string();
+    let context =
+        Context::full(&runtime).map_err(|error| js_error("create headless QuickJS context", error))?;
     let input_json = serde_json::to_string(&args)?;
 
-    let execution = context.async_with(async move |ctx| -> rquickjs::Result<String> {
-        let uuid_fn =
-            Function::new(ctx.clone(), || uuid::Uuid::new_v4().to_string())?.with_name("randomUUID")?;
-        ctx.globals().set("__voloRandomUuid", uuid_fn)?;
+    let envelope_json = context
+        .with(|ctx| -> rquickjs::Result<String> {
+            let uuid_fn = Function::new(ctx.clone(), || uuid::Uuid::new_v4().to_string())?
+                .with_name("randomUUID")?;
+            ctx.globals().set("__voloRandomUuid", uuid_fn)?;
 
-        ctx.eval::<(), _>(HEADLESS_SHIM)?;
-        ctx.eval::<(), _>(source)?;
+            ctx.eval::<(), _>(HEADLESS_SHIM)?;
+            ctx.eval::<(), _>(source)?;
 
-        let invoke: Function = ctx.globals().get("__voloInvoke")?;
-        let promise: Promise = invoke.call((input_json,))?;
-        promise.into_future::<String>().await
-    });
-
-    let envelope_json = tokio::time::timeout(timeout, execution)
-        .await
-        .map_err(|_| VoloError::Other(format!(
-            "headless plugin tool timed out after {} seconds",
-            timeout.as_secs_f32()
-        )))?
+            let invoke: Function = ctx.globals().get("__voloInvoke")?;
+            let promise: Promise = invoke.call((input_json,))?;
+            promise.finish::<String>()
+        })
         .map_err(|error| js_error("execute headless plugin tool", error))?;
 
     let envelope: Value = serde_json::from_str(&envelope_json)?;
@@ -220,6 +205,17 @@ async fn execute_source_with_timeout(
             .unwrap_or("headless plugin tool failed")
             .to_string(),
     ))
+}
+
+async fn execute_source_with_timeout(
+    source: &str,
+    args: Value,
+    timeout: Duration,
+) -> Result<Value> {
+    let source = source.to_string();
+    tokio::task::spawn_blocking(move || execute_source_sync(source, args, timeout))
+        .await
+        .map_err(|error| VoloError::Other(format!("headless plugin worker failed: {}", error)))?
 }
 
 pub async fn execute_source(source: &str, args: Value) -> Result<Value> {
@@ -326,7 +322,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn unresolved_promise_is_bounded_by_timeout() {
+    async fn unresolved_promise_fails_instead_of_hanging_scheduler() {
         let source = r#"
             rubick.tool.onInvoke(function () {
               return new Promise(function () {});
@@ -336,6 +332,6 @@ mod tests {
         let error = execute_source_with_timeout(source, json!({}), Duration::from_millis(30))
             .await
             .unwrap_err();
-        assert!(error.to_string().contains("timed out"));
+        assert!(error.to_string().contains("execute headless plugin tool"));
     }
 }
