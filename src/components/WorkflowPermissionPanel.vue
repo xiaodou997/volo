@@ -8,6 +8,10 @@ const props = defineProps<{
   workflows: WorkflowOption[];
 }>();
 
+const emit = defineEmits<{
+  grantsChanged: [];
+}>();
+
 const workflowId = ref('');
 const capability = ref('clipboard.read');
 const resource = ref('');
@@ -17,7 +21,18 @@ const status = ref('');
 const error = ref('');
 
 const principal = computed(() => workflowId.value ? `workflow:${workflowId.value}` : '');
-const resourceRequired = computed(() => capability.value.trim() === 'fs.read');
+const resourceRequired = computed(() => {
+  const value = capability.value.trim();
+  return value === 'fs.read' || value === 'fs.write' || value === 'shell.open';
+});
+const resourcePlaceholder = computed(() => {
+  const value = capability.value.trim();
+  if (value === 'fs.read') return '文件 / 目录 / 目标完整路径（必填）';
+  if (value === 'fs.write') return '写入目标完整路径（必填）';
+  if (value === 'shell.open') return 'URL 或本地路径（必填）';
+  if (value.startsWith('mcp.call:')) return 'MCP Tool 名（省略时自动取 capability）';
+  return 'Resource，可选';
+});
 const workflowGrants = computed(() =>
   grants.value.filter((grant) => grant.pluginId === principal.value && grant.scope === 'always'),
 );
@@ -49,6 +64,7 @@ async function requestAlwaysGrant() {
       resource: resource.value.trim() || null,
     });
     await refreshGrants();
+    emit('grantsChanged');
     status.value = '已授予 Workflow 后台 Always 权限';
   } catch (value) {
     error.value = errorText(value);
@@ -67,6 +83,7 @@ async function revokeGrant(grant: PermissionGrant) {
       resource: grant.resource ?? null,
     });
     await refreshGrants();
+    emit('grantsChanged');
     status.value = '已撤销授权';
     error.value = '';
   } catch (value) {
@@ -125,7 +142,7 @@ onMounted(() => {
         <input
           v-model="resource"
           class="permission-input"
-          :placeholder="resourceRequired ? '文件 / 目录 / 目标完整路径（必填）' : 'Resource，可选'"
+          :placeholder="resourcePlaceholder"
           :disabled="busy"
         />
 
@@ -139,7 +156,7 @@ onMounted(() => {
       </div>
 
       <p class="permission-hint">
-        Medium / High / Critical 能力仍会弹出标准审批框；只有选择“始终允许”后，后台 Scheduler 才会接受该授权。fs.read 必须填写精确路径；已存在文件/目录会解析为真实路径，exists 使用的未创建目标会按真实父目录规范化。目录授权不会自动覆盖子文件。
+        Medium / High / Critical 能力仍会弹出标准审批框；只有选择“始终允许”后，后台 Scheduler 才会接受该授权。资源绑定能力必须使用与运行时一致的精确 Resource。fs.read 会规范化真实路径；fs.write / shell.open 会展开 ~；MCP Resource 默认自动使用 capability 中的具体 Tool 名。
       </p>
 
       <div v-if="workflowGrants.length" class="grant-list">
