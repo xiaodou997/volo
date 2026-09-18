@@ -11,15 +11,27 @@ export interface DailyAutomationTrigger {
 
 export type AutomationTrigger = IntervalAutomationTrigger | DailyAutomationTrigger;
 
+export interface AutomationRetryPolicy {
+  maxRetries: number;
+  backoffMinutes: number;
+}
+
+export interface AutomationRetryState {
+  attempt: number;
+  retryAt: string;
+}
+
 export interface WorkflowAutomation {
   id: string;
   workflowId: string;
   enabled: boolean;
   trigger: AutomationTrigger;
+  retryPolicy?: AutomationRetryPolicy;
 }
 
 export interface AutomationRecord extends WorkflowAutomation {
   nextRunAt?: string;
+  retryState?: AutomationRetryState;
 }
 
 function validateAutomationIdentity(id: string, workflowId: string) {
@@ -34,11 +46,25 @@ function validateAutomationIdentity(id: string, workflowId: string) {
   }
 }
 
+export function buildRetryPolicy(
+  maxRetries: number,
+  backoffMinutes: number,
+): AutomationRetryPolicy {
+  if (!Number.isInteger(maxRetries) || maxRetries < 1 || maxRetries > 10) {
+    throw new Error('最大重试次数必须是 1 到 10 之间的整数');
+  }
+  if (!Number.isInteger(backoffMinutes) || backoffMinutes < 1 || backoffMinutes > 1440) {
+    throw new Error('重试间隔必须是 1 到 1440 分钟之间的整数');
+  }
+  return { maxRetries, backoffMinutes };
+}
+
 export function buildIntervalAutomation(
   id: string,
   workflowId: string,
   everyMinutes: number,
   enabled: boolean,
+  retryPolicy?: AutomationRetryPolicy,
 ): WorkflowAutomation {
   validateAutomationIdentity(id, workflowId);
   if (!Number.isInteger(everyMinutes) || everyMinutes < 1 || everyMinutes > 525_600) {
@@ -53,6 +79,7 @@ export function buildIntervalAutomation(
       type: 'interval',
       everyMinutes,
     },
+    ...(retryPolicy ? { retryPolicy } : {}),
   };
 }
 
@@ -62,6 +89,7 @@ export function buildDailyAutomation(
   hour: number,
   minute: number,
   enabled: boolean,
+  retryPolicy?: AutomationRetryPolicy,
 ): WorkflowAutomation {
   validateAutomationIdentity(id, workflowId);
   if (
@@ -84,6 +112,7 @@ export function buildDailyAutomation(
       hour,
       minute,
     },
+    ...(retryPolicy ? { retryPolicy } : {}),
   };
 }
 
@@ -128,4 +157,15 @@ export function automationTriggerLabel(record: WorkflowAutomation): string {
   if (minutes % 1440 === 0) return `每 ${minutes / 1440} 天`;
   if (minutes % 60 === 0) return `每 ${minutes / 60} 小时`;
   return `每 ${minutes} 分钟`;
+}
+
+
+export function automationRetryLabel(record: AutomationRecord): string {
+  if (record.retryState) {
+    return `第 ${record.retryState.attempt} 次重试 · ${formatAutomationNextRun(record.retryState.retryAt)}`;
+  }
+  if (record.retryPolicy) {
+    return `失败后最多重试 ${record.retryPolicy.maxRetries} 次 · 间隔 ${record.retryPolicy.backoffMinutes} 分钟`;
+  }
+  return '不重试';
 }
