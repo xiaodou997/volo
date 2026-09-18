@@ -7,8 +7,8 @@ use crate::ai::plugin_tools::{lookup_tool, PLUGIN_NAME_PREFIX};
 use crate::ai::tools::ToolRegistry;
 use crate::ai::workflow::{Workflow, WorkflowStep};
 use crate::core::capability::{capability_meta, RiskLevel};
-use crate::core::permission::{GrantInfo, PermissionEngine, Scope};
-use crate::error::{Result, VoloError};
+use crate::core::permission::{GrantInfo, PermissionEngine};
+use crate::error::Result;
 use crate::plugin::manager::PluginState;
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
@@ -313,6 +313,7 @@ pub fn analyze(app: &AppHandle, workflow: &Workflow) -> Result<AutomationPermiss
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::permission::Scope;
 
     fn grant(
         principal: &str,
