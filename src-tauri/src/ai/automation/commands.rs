@@ -5,7 +5,7 @@ use crate::core::capability::{capability_meta, RiskLevel};
 use crate::core::permission::{enforce_background, PermissionEngine};
 use crate::error::{Result, VoloError};
 
-use super::{storage, AutomationRecord, WorkflowAutomation};
+use super::{preflight, storage, AutomationRecord, WorkflowAutomation};
 
 fn normalize_background_resource(
     capability: &str,
@@ -159,4 +159,18 @@ mod tests {
             None
         );
     }
+}
+
+
+#[tauri::command]
+pub fn automation_permission_preflight(
+    app: AppHandle,
+    workflow_id: String,
+) -> Result<preflight::AutomationPermissionPreflight> {
+    let workflow_id = workflow_id.trim();
+    if workflow_id.is_empty() {
+        return Err(VoloError::Other("workflow_id cannot be empty".to_string()));
+    }
+    let workflow = crate::ai::workflow::commands::load_saved_workflow(&app, workflow_id)?;
+    preflight::analyze(&app, &workflow)
 }
