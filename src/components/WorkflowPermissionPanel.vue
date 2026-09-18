@@ -17,6 +17,7 @@ const status = ref('');
 const error = ref('');
 
 const principal = computed(() => workflowId.value ? `workflow:${workflowId.value}` : '');
+const resourceRequired = computed(() => capability.value.trim() === 'fs.read');
 const workflowGrants = computed(() =>
   grants.value.filter((grant) => grant.pluginId === principal.value && grant.scope === 'always'),
 );
@@ -124,17 +125,21 @@ onMounted(() => {
         <input
           v-model="resource"
           class="permission-input"
-          placeholder="Resource，可选"
+          :placeholder="resourceRequired ? '已存在文件的完整路径（必填）' : 'Resource，可选'"
           :disabled="busy"
         />
 
-        <button class="grant-btn" :disabled="busy || !workflowId" @click="requestAlwaysGrant">
+        <button
+          class="grant-btn"
+          :disabled="busy || !workflowId || (resourceRequired && !resource.trim())"
+          @click="requestAlwaysGrant"
+        >
           {{ busy ? '处理中…' : '申请 Always 授权' }}
         </button>
       </div>
 
       <p class="permission-hint">
-        Medium / High / Critical 能力仍会弹出标准审批框；只有选择“始终允许”后，后台 Scheduler 才会接受该授权。
+        Medium / High / Critical 能力仍会弹出标准审批框；只有选择“始终允许”后，后台 Scheduler 才会接受该授权。fs.read 必须填写当前已存在文件，后端会保存其规范化真实路径。
       </p>
 
       <div v-if="workflowGrants.length" class="grant-list">
