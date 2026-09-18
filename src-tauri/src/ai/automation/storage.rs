@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-use chrono::{DateTime, SecondsFormat, Utc};
+use chrono::{DateTime, Duration, SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 
@@ -34,6 +34,28 @@ pub struct AutomationRecord {
     pub automation: WorkflowAutomation,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_run_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_state: Option<AutomationRetryState>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AutomationRetryState {
+    pub attempt: u32,
+    pub retry_at: String,
+}
+
+impl AutomationRetryState {
+    pub fn parsed_retry_at(&self) -> Result<DateTime<Utc>> {
+        DateTime::parse_from_rfc3339(&self.retry_at)
+            .map(|value| value.with_timezone(&Utc))
+            .map_err(|error| {
+                VoloError::Other(format!(
+                    "invalid automation retryAt '{}': {}",
+                    self.retry_at, error
+                ))
+            })
+    }
 }
 
 impl AutomationRecord {
@@ -60,6 +82,8 @@ impl AutomationRecord {
 pub struct DueAutomation {
     pub automation: WorkflowAutomation,
     pub scheduled_for: DateTime<Utc>,
+    /// None 表示正常 schedule；Some(n) 表示第 n 次 retry。
+    pub retry_attempt: Option<u32>,
 }
 
 pub fn automations_dir(app: &AppHandle) -> Result<PathBuf> {
@@ -160,6 +184,9 @@ fn read_record(path: &Path) -> Result<AutomationRecord> {
     let record: AutomationRecord = serde_json::from_str(&content)?;
     validate_automation(&record.automation)?;
     record.parsed_next_run()?;
+    if let Some(retry_state) = &record.retry_state {
+        retry_state.parsed_retry_at()?;
+    }
     Ok(record)
 }
 
@@ -214,26 +241,31 @@ pub fn save_automation(
     validate_automation(&automation)?;
     let existing = existing_record(dir, &automation.id)?;
 
-    let next_run_at = if !automation.enabled {
-        None
-    } else {
-        let preserve = existing.as_ref().is_some_and(|record| {
+    let preserve = automation.enabled
+        && existing.as_ref().is_some_and(|record| {
             record.automation.enabled
                 && record.automation.workflow_id == automation.workflow_id
                 && record.automation.trigger == automation.trigger
+                && record.automation.retry_policy == automation.retry_policy
                 && record.next_run_at.is_some()
         });
 
-        if preserve {
-            existing.and_then(|record| record.next_run_at)
-        } else {
-            Some(format_time(initial_next_run(&automation.trigger, now)?))
-        }
+    let (next_run_at, retry_state) = if !automation.enabled {
+        (None, None)
+    } else if preserve {
+        let existing = existing.expect("preserve requires existing record");
+        (existing.next_run_at, existing.retry_state)
+    } else {
+        (
+            Some(format_time(initial_next_run(&automation.trigger, now)?)),
+            None,
+        )
     };
 
     let record = AutomationRecord {
         automation,
         next_run_at,
+        retry_state,
     };
     write_record(dir, &record)?;
     Ok(record)
@@ -271,6 +303,58 @@ pub fn update_next_run(
     Ok(record)
 }
 
+
+/// Scheduler 专用：一次执行失败后按当前 definition 尝试安排 retry。
+///
+/// - definition 在执行期间被编辑/停用时，不把旧执行结果写回新 definition；
+/// - retry 永远不会跨过下一次正常 schedule，避免恢复后形成突发补跑；
+/// - retry claim 会在真正执行前清空 retryState，防止重复 claim。
+pub fn schedule_retry_after_failure(
+    dir: &Path,
+    claim: &DueAutomation,
+    now: DateTime<Utc>,
+) -> Result<Option<AutomationRecord>> {
+    let _guard = lock_store()?;
+    let Some(mut record) = existing_record(dir, &claim.automation.id)? else {
+        return Ok(None);
+    };
+
+    if !record.automation.enabled || record.automation != claim.automation {
+        return Ok(None);
+    }
+
+    let Some(policy) = record.automation.retry_policy.as_ref() else {
+        return Ok(None);
+    };
+
+    let next_attempt = claim
+        .retry_attempt
+        .unwrap_or(0)
+        .checked_add(1)
+        .ok_or_else(|| VoloError::Other("automation retry attempt overflow".to_string()))?;
+    if next_attempt > policy.max_retries {
+        return Ok(None);
+    }
+
+    let retry_at = now
+        .checked_add_signed(Duration::minutes(i64::from(policy.backoff_minutes)))
+        .ok_or_else(|| VoloError::Other("automation retry time overflow".to_string()))?;
+
+    if record
+        .parsed_next_run()?
+        .is_some_and(|next_run| retry_at >= next_run)
+    {
+        return Ok(None);
+    }
+
+    record.retry_state = Some(AutomationRetryState {
+        attempt: next_attempt,
+        retry_at: format_time(retry_at),
+    });
+    write_record(dir, &record)?;
+    Ok(Some(record))
+}
+
 /// 原子 claim 当前到期的 enabled Automations：
 /// - 在同一把存储锁内重新读取最新 definition；
 /// - 对每个 due record 先推进并持久化 nextRunAt，再返回执行 claim；
@@ -289,20 +373,40 @@ pub fn claim_due_automations(dir: &Path, now: DateTime<Utc>) -> Result<Vec<DueAu
         let Some(scheduled_for) = record.parsed_next_run()? else {
             let repaired = initial_next_run(&record.automation.trigger, now)?;
             record.next_run_at = Some(format_time(repaired));
+            record.retry_state = None;
             write_record(dir, &record)?;
             continue;
         };
 
-        if !is_due(scheduled_for, now) {
+        // 正常 schedule 到期时优先于任何过期 retry。这样应用长时间休眠后只执行
+        // 一个正常 occurrence，不会先补 retry 再紧接着补 schedule。
+        if is_due(scheduled_for, now) {
+            let next_run = advance_next_run(&record.automation.trigger, scheduled_for, now)?;
+            record.next_run_at = Some(format_time(next_run));
+            record.retry_state = None;
+            write_record(dir, &record)?;
+            claimed.push(DueAutomation {
+                automation: record.automation,
+                scheduled_for,
+                retry_attempt: None,
+            });
             continue;
         }
 
-        let next_run = advance_next_run(&record.automation.trigger, scheduled_for, now)?;
-        record.next_run_at = Some(format_time(next_run));
+        let Some(retry_state) = record.retry_state.clone() else {
+            continue;
+        };
+        let retry_at = retry_state.parsed_retry_at()?;
+        if !is_due(retry_at, now) {
+            continue;
+        }
+
+        record.retry_state = None;
         write_record(dir, &record)?;
         claimed.push(DueAutomation {
             automation: record.automation,
-            scheduled_for,
+            scheduled_for: retry_at,
+            retry_attempt: Some(retry_state.attempt),
         });
     }
 
@@ -338,6 +442,7 @@ mod tests {
             trigger: AutomationTrigger::Interval {
                 every_minutes: minutes,
             },
+            retry_policy: None,
         }
     }
 
