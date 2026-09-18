@@ -645,6 +645,29 @@ mod tests {
         assert!(matches!(result, Err(VoloError::PermissionDenied(_))));
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn test_existing_read_path_resolves_final_symlink_target() {
+        use std::os::unix::fs::symlink;
+
+        let root = temp_dir("existing_symlink");
+        let allowed = root.join("allowed");
+        let outside = root.join("outside");
+        std::fs::create_dir_all(&allowed).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+
+        let target = outside.join("secret.txt");
+        std::fs::write(&target, "secret").unwrap();
+        let link = allowed.join("input.txt");
+        symlink(&target, &link).unwrap();
+
+        let resolved = canonicalize_existing_plugin_path(&link.to_string_lossy()).unwrap();
+        assert_eq!(resolved, std::fs::canonicalize(&target).unwrap());
+        assert!(!resolved.starts_with(std::fs::canonicalize(&allowed).unwrap()));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     #[test]
     fn test_creation_path_uses_canonical_existing_ancestor() {
         let root = temp_dir("creation");
