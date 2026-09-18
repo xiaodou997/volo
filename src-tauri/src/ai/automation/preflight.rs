@@ -380,6 +380,59 @@ mod tests {
     }
 
     #[test]
+    fn builtin_fs_read_preflight_distinguishes_missing_ready_and_runtime() {
+        let dir = std::env::temp_dir().join(format!(
+            "volo-preflight-fs-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("input.txt");
+        std::fs::write(&file, "hello").unwrap();
+        let canonical = std::fs::canonicalize(&file).unwrap();
+        let args = serde_json::json!({ "path": file.to_string_lossy() });
+
+        let missing = analyze_builtin(
+            "workflow:demo",
+            &[],
+            "read",
+            "fs_read",
+            &args,
+        );
+        assert_eq!(missing.status, PreflightStatus::Missing);
+        assert_eq!(
+            missing.resource.as_deref(),
+            Some(canonical.to_string_lossy().as_ref())
+        );
+
+        let grants = vec![grant(
+            "workflow:demo",
+            "fs.read",
+            Some(canonical.to_string_lossy().as_ref()),
+            Scope::Always,
+        )];
+        let ready = analyze_builtin(
+            "workflow:demo",
+            &grants,
+            "read",
+            "fs_read",
+            &args,
+        );
+        assert_eq!(ready.status, PreflightStatus::Ready);
+
+        let runtime = analyze_builtin(
+            "workflow:demo",
+            &[],
+            "read",
+            "fs_read",
+            &serde_json::json!({ "path": "${input.path}" }),
+        );
+        assert_eq!(runtime.status, PreflightStatus::Runtime);
+        assert!(runtime.resource.is_none());
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn plugin_runtime_status_is_never_treated_as_fully_static() {
         let plugin = crate::plugin::manager::Plugin {
             id: "demo".to_string(),
