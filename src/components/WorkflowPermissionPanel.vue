@@ -8,6 +8,10 @@ const props = defineProps<{
   workflows: WorkflowOption[];
 }>();
 
+const emit = defineEmits<{
+  grantsChanged: [];
+}>();
+
 const workflowId = ref('');
 const capability = ref('clipboard.read');
 const resource = ref('');
@@ -49,6 +53,7 @@ async function requestAlwaysGrant() {
       resource: resource.value.trim() || null,
     });
     await refreshGrants();
+    emit('grantsChanged');
     status.value = '已授予 Workflow 后台 Always 权限';
   } catch (value) {
     error.value = errorText(value);
@@ -67,6 +72,7 @@ async function revokeGrant(grant: PermissionGrant) {
       resource: grant.resource ?? null,
     });
     await refreshGrants();
+    emit('grantsChanged');
     status.value = '已撤销授权';
     error.value = '';
   } catch (value) {
