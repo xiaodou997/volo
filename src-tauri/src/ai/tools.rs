@@ -5,7 +5,6 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use tauri::AppHandle;
 use tauri_plugin_clipboard_manager::ClipboardExt;
-use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_opener::OpenerExt;
 
 use crate::core::permission::{enforce_background, PermissionEngine};

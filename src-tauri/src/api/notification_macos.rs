@@ -9,11 +9,13 @@
 //! 抛回调用方。前置条件：应用必须经过有效签名（Developer ID / Apple Development），
 //! 否则系统仍拒绝注册（macOS 26+ 的要求）。
 
+use std::panic::AssertUnwindSafe;
 use std::ptr::NonNull;
 use std::sync::mpsc;
 use std::time::Duration;
 
 use block2::RcBlock;
+use objc2::exception::catch;
 use objc2::runtime::Bool;
 use objc2_foundation::{NSError, NSString};
 use objc2_user_notifications::{
@@ -36,11 +38,27 @@ fn ns_error_message(err: *mut NSError) -> Option<String> {
     Some(description.to_string())
 }
 
+/// 包装 ObjC FFI 入口，捕获系统直接 raise 的 NSException。
+///
+/// 未有效签名的进程调用 UNUserNotificationCenter（macOS 26+ 要求签名）
+/// 会在调用点直接抛异常（abort 前可被 objc2 的 exception 桥捕获），
+/// 这里把它映射为可读的 VoloError，而不是让进程 Abort trap。
+fn catch_objc<R>(f: impl FnOnce() -> R) -> Result<R> {
+    match catch(AssertUnwindSafe(f)) {
+        Ok(value) => Ok(value),
+        Err(exc) => Err(VoloError::Other(format!(
+            "macOS 通知接口被系统拒绝（未签名或环境不支持）: {}",
+            exc.map(|e| e.to_string())
+                .unwrap_or_else(|| "未知 NSException".to_string())
+        ))),
+    }
+}
+
 /// 当前通知授权状态（真实系统状态）。
 ///
 /// 返回值：`notDetermined` / `denied` / `authorized` / `provisional` / `ephemeral`。
 pub fn authorization_status() -> Result<&'static str> {
-    let center = UNUserNotificationCenter::currentNotificationCenter();
+    let center = catch_objc(UNUserNotificationCenter::currentNotificationCenter)?;
     let (tx, rx) = mpsc::channel();
     let block: RcBlock<dyn Fn(NonNull<UNNotificationSettings>)> =
         RcBlock::new(move |settings: NonNull<UNNotificationSettings>| {
@@ -70,7 +88,7 @@ fn ensure_authorized() -> Result<()> {
             "Volo 通知被系统拒绝：请打开 系统设置 → 通知 → Volo，开启「允许通知」".to_string(),
         )),
         _ => {
-            let center = UNUserNotificationCenter::currentNotificationCenter();
+            let center = catch_objc(UNUserNotificationCenter::currentNotificationCenter)?;
             let options = UNAuthorizationOptions::Alert
                 | UNAuthorizationOptions::Sound
                 | UNAuthorizationOptions::Badge;
@@ -85,7 +103,9 @@ fn ensure_authorized() -> Result<()> {
                     };
                     let _ = tx.send(outcome);
                 });
-            center.requestAuthorizationWithOptions_completionHandler(options, &block);
+            catch_objc(|| {
+                center.requestAuthorizationWithOptions_completionHandler(options, &block)
+            })?;
             rx.recv_timeout(CALLBACK_TIMEOUT)
                 .map_err(|_| VoloError::Other("macOS 通知授权申请超时".to_string()))?
                 .map_err(VoloError::Other)
@@ -97,7 +117,7 @@ fn ensure_authorized() -> Result<()> {
 pub fn send(title: &str, body: &str) -> Result<()> {
     ensure_authorized()?;
 
-    let center = UNUserNotificationCenter::currentNotificationCenter();
+    let center = catch_objc(UNUserNotificationCenter::currentNotificationCenter)?;
     let content = UNMutableNotificationContent::new();
     content.setTitle(&NSString::from_str(title));
     content.setBody(&NSString::from_str(body));
@@ -113,12 +133,21 @@ pub fn send(title: &str, body: &str) -> Result<()> {
     let block: RcBlock<dyn Fn(*mut NSError)> = RcBlock::new(move |err: *mut NSError| {
         let _ = tx.send(ns_error_message(err));
     });
-    center.addNotificationRequest_withCompletionHandler(&request, Some(&block));
+    center_add_request(&center, &request, &block)?;
     match rx.recv_timeout(CALLBACK_TIMEOUT) {
         // None = 无错误 = 已提交；超时视为已提交（系统异步完成投递）。
         Ok(None) | Err(_) => Ok(()),
         Ok(Some(message)) => Err(VoloError::Other(format!("macOS 通知投递失败: {message}"))),
     }
+}
+
+/// 投递请求同样是系统可能直接 raise 异常的入口（未签名进程），单独包装。
+fn center_add_request(
+    center: &UNUserNotificationCenter,
+    request: &UNNotificationRequest,
+    block: &RcBlock<dyn Fn(*mut NSError)>,
+) -> Result<()> {
+    catch_objc(|| center.addNotificationRequest_withCompletionHandler(request, Some(block)))
 }
 
 #[cfg(test)]
