@@ -39,6 +39,60 @@ const preflight = shallowRef<AutomationPermissionPreflight | null>(null);
 const preflightBusy = ref(false);
 const preflightError = ref('');
 
+// ---- 通知权限引导（#49） ----
+// tauri-plugin-notification 桌面端权限 API 是 Granted stub；
+// macOS 在首条通知送达后才注册应用，因此以“可观察的测试通知”为验收动作。
+interface NotificationPermissionStatus {
+  pluginState: string;
+  primed: boolean;
+  settingsUrl: string | null;
+}
+
+const notifyStatus = shallowRef<NotificationPermissionStatus | null>(null);
+const notifyBusy = ref(false);
+const notifyMessage = ref('');
+
+const notifyStatusText = computed(() => {
+  const status = notifyStatus.value;
+  if (!status) return '未知';
+  if (!status.primed) return '尚未发送测试通知（macOS 首条通知后才会注册 Volo）';
+  return '已发送测试通知 · 看不到请检查系统通知设置';
+});
+
+async function refreshNotifyStatus() {
+  try {
+    notifyStatus.value = await invoke<NotificationPermissionStatus>(
+      'notification_permission_status',
+    );
+    notifyMessage.value = '';
+  } catch (value) {
+    notifyMessage.value = errorText(value);
+  }
+}
+
+async function requestNotifyPermission() {
+  notifyBusy.value = true;
+  notifyMessage.value = '';
+  try {
+    notifyStatus.value = await invoke<NotificationPermissionStatus>(
+      'notification_request_permission',
+    );
+    notifyMessage.value = '已发送测试通知，请看屏幕右上角。';
+  } catch (value) {
+    notifyMessage.value = errorText(value);
+  } finally {
+    notifyBusy.value = false;
+  }
+}
+
+async function openNotifySettings() {
+  try {
+    await invoke('notification_open_settings');
+  } catch (value) {
+    notifyMessage.value = errorText(value);
+  }
+}
+
 const selectedRecord = computed(
   () => records.value.find((record) => record.id === selectedAutomationId.value) ?? null,
 );
@@ -257,6 +311,7 @@ onMounted(() => {
   void refreshAutomations().catch((value) => {
     error.value = errorText(value);
   });
+  void refreshNotifyStatus();
 });
 </script>
 
@@ -270,6 +325,28 @@ onMounted(() => {
         </div>
         <button class="ghost-btn" :disabled="busy" @click="manualRefresh">刷新</button>
       </div>
+
+      <section class="notify-perm-card">
+        <div class="notify-perm-row">
+          <span class="notify-perm-dot" :class="notifyStatus?.primed ? 'ok' : 'warn'" />
+          <div class="notify-perm-copy">
+            <strong>通知权限</strong>
+            <span>{{ notifyStatusText }}</span>
+            <span v-if="notifyMessage" class="notify-perm-msg">{{ notifyMessage }}</span>
+          </div>
+          <button class="ghost-btn" :disabled="notifyBusy" @click="requestNotifyPermission">
+            发送测试通知
+          </button>
+          <button
+            v-if="notifyStatus?.settingsUrl"
+            class="ghost-btn"
+            :disabled="notifyBusy"
+            @click="openNotifySettings"
+          >
+            打开通知设置
+          </button>
+        </div>
+      </section>
 
       <div class="automation-toolbar">
         <select
@@ -776,6 +853,57 @@ onMounted(() => {
 
 .preflight-card {
   margin-top: 10px;
+}
+
+.notify-perm-card {
+  margin-top: 10px;
+  padding: 9px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 9px;
+  background: var(--bg-secondary);
+}
+
+.notify-perm-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.notify-perm-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+
+.notify-perm-dot.ok {
+  background: var(--success-color, #34c759);
+}
+
+.notify-perm-dot.warn {
+  background: var(--warning-color, #ff9f0a);
+}
+
+.notify-perm-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  flex: 1;
+}
+
+.notify-perm-copy strong {
+  font-size: 11px;
+  color: var(--text-primary);
+}
+
+.notify-perm-copy span {
+  font-size: 10px;
+  color: var(--text-secondary);
+}
+
+.notify-perm-msg {
+  color: var(--text-primary);
 }
 
 .preflight-heading,

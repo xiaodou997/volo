@@ -6,6 +6,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- 通知权限引导（#49）：tauri-plugin-notification 桌面端权限 API 为硬编码 Granted stub，真实授权由系统在首条通知后注册应用决定。新增 `notification_permission_status` / `notification_request_permission`（发送可观察的引导通知）/ `notification_open_settings`（macOS 直达 系统设置 → 通知 → Volo）三个命令；Automation 面板新增"通知权限"卡片，可一键发送测试通知并跳转系统通知设置
+
 ## [1.10.0] - 2026-08-27
 
 体验打磨迭代：AI 对话上下文与可操作性、搜索排序 frecency。
