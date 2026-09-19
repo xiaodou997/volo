@@ -1,5 +1,6 @@
 use std::future::Future;
 use std::pin::Pin;
+use std::time::Duration;
 
 use serde_json::{json, Value};
 
@@ -22,15 +23,36 @@ const WORKFLOW_AI_SYSTEM_PROMPT: &str = "你正在执行 Volo Workflow 的一个
 pub struct WorkflowToolRunner<'a> {
     executor: &'a dyn ToolExecutor,
     backend: Option<&'a dyn ChatBackend>,
+    ai_timeout: Option<Duration>,
 }
 
 impl<'a> WorkflowToolRunner<'a> {
     pub fn new(executor: &'a dyn ToolExecutor) -> Self {
-        Self { executor, backend: None }
+        Self {
+            executor,
+            backend: None,
+            ai_timeout: None,
+        }
     }
 
     pub fn with_backend(executor: &'a dyn ToolExecutor, backend: &'a dyn ChatBackend) -> Self {
-        Self { executor, backend: Some(backend) }
+        Self {
+            executor,
+            backend: Some(backend),
+            ai_timeout: None,
+        }
+    }
+
+    pub fn with_backend_timeout(
+        executor: &'a dyn ToolExecutor,
+        backend: &'a dyn ChatBackend,
+        ai_timeout: Duration,
+    ) -> Self {
+        Self {
+            executor,
+            backend: Some(backend),
+            ai_timeout: Some(ai_timeout),
+        }
     }
 
     fn ai_prompt(prompt: &str, context: &WorkflowContext) -> Result<String> {
@@ -50,7 +72,17 @@ impl<'a> WorkflowToolRunner<'a> {
             Message::system(WORKFLOW_AI_SYSTEM_PROMPT),
             Message::user(&Self::ai_prompt(prompt, context)?),
         ];
-        let response = backend.chat(&messages, &[]).await?;
+        let response = match self.ai_timeout {
+            Some(timeout) => tokio::time::timeout(timeout, backend.chat(&messages, &[]))
+                .await
+                .map_err(|_| {
+                    VoloError::Other(format!(
+                        "workflow AI step 超时（{} 秒）",
+                        timeout.as_secs()
+                    ))
+                })??,
+            None => backend.chat(&messages, &[]).await?,
+        };
         if !response.tool_calls.is_empty() {
             return Err(VoloError::Other("workflow AI step 不接受 tool call 响应".to_string()));
         }
@@ -111,6 +143,24 @@ mod tests {
     struct MockChatBackend {
         calls: Mutex<Vec<(Vec<String>, usize)>>,
         return_tool_call: bool,
+    }
+
+    struct SlowChatBackend;
+
+    impl ChatBackend for SlowChatBackend {
+        fn chat<'a>(
+            &'a self,
+            _messages: &'a [Message],
+            _tools: &'a [ToolSpec],
+        ) -> Pin<Box<dyn Future<Output = Result<ChatResponse>> + Send + 'a>> {
+            Box::pin(async move {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                Ok(ChatResponse {
+                    content: Some("late".to_string()),
+                    tool_calls: vec![],
+                })
+            })
+        }
     }
 
     impl MockChatBackend {
@@ -192,6 +242,35 @@ mod tests {
         assert!(calls[0].0[1].contains("总结上一步结果"));
         assert!(calls[0].0[1].contains("\"source\": \"manual\""));
         assert!(calls[0].0[1].contains("\"read\""));
+    }
+
+    #[tokio::test]
+    async fn background_ai_timeout_fails_the_step_instead_of_hanging() {
+        let executor = MockToolExecutor::new();
+        let backend = SlowChatBackend;
+        let runner = WorkflowToolRunner::with_backend_timeout(
+            &executor,
+            &backend,
+            Duration::from_millis(10),
+        );
+        let workflow = Workflow {
+            id: "ai-timeout".into(),
+            name: "AI Timeout".into(),
+            steps: vec![WorkflowStep::Ai {
+                id: "summary".into(),
+                prompt: "总结".into(),
+            }],
+        };
+
+        let execution = execute_workflow(&workflow, Value::Null, &runner)
+            .await
+            .unwrap();
+        assert_eq!(execution.status, WorkflowExecutionStatus::Failed);
+        assert!(execution
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("AI step 超时"));
     }
 
     #[tokio::test]
