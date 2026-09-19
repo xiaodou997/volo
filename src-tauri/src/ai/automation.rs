@@ -7,6 +7,8 @@
 pub(crate) mod commands;
 pub(crate) mod preflight;
 pub(crate) mod scheduler;
+#[cfg(test)]
+mod m1_smoke;
 mod storage;
 pub use storage::{AutomationRecord, AutomationRetryState};
 

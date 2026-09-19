@@ -11,6 +11,7 @@
 //! permission path used by BackgroundToolExecutor. Medium/high-risk APIs require a Workflow-scoped
 //! Always grant before unattended execution; unsupported host APIs still fail fast.
 
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use base64::Engine;
@@ -227,6 +228,29 @@ const HEADLESS_SHIM: &str = r#"
 "#;
 
 
+pub(crate) trait HeadlessHost: Send + Sync {
+    fn call_envelope(&self, method: String, args_json: String) -> String;
+}
+
+pub(crate) fn authorize_headless_host(
+    engine: &PermissionEngine,
+    principal: &str,
+    plugin_id: &str,
+    permissions: &[String],
+    capability: &str,
+    resource: Option<&str>,
+) -> Result<()> {
+    if !PermissionEngine::declared(permissions, capability, resource) {
+        engine.audit(principal, capability, resource, "deny", None);
+        return Err(VoloError::PermissionDenied(format!(
+            "Plugin '{}' does not declare permission '{}' for resource {:?}",
+            plugin_id, capability, resource
+        )));
+    }
+
+    enforce_background(engine, principal, capability, resource)
+}
+
 #[derive(Clone)]
 struct HeadlessPluginHost {
     app: AppHandle,
@@ -247,15 +271,14 @@ impl HeadlessPluginHost {
 
     fn authorize_resource(&self, capability: &str, resource: Option<&str>) -> Result<()> {
         let engine = self.app.state::<PermissionEngine>();
-        if !PermissionEngine::declared(&self.permissions, capability, resource) {
-            engine.audit(&self.principal, capability, resource, "deny", None);
-            return Err(VoloError::PermissionDenied(format!(
-                "Plugin '{}' does not declare permission '{}' for resource {:?}",
-                self.plugin_id, capability, resource
-            )));
-        }
-
-        enforce_background(&engine, &self.principal, capability, resource)
+        authorize_headless_host(
+            &engine,
+            &self.principal,
+            &self.plugin_id,
+            &self.permissions,
+            capability,
+            resource,
+        )
     }
 
     fn authorize(&self, capability: &str) -> Result<()> {
@@ -463,6 +486,12 @@ impl HeadlessPluginHost {
     }
 }
 
+impl HeadlessHost for HeadlessPluginHost {
+    fn call_envelope(&self, method: String, args_json: String) -> String {
+        HeadlessPluginHost::call_envelope(self, method, args_json)
+    }
+}
+
 fn js_error(context: &str, error: impl std::fmt::Display) -> VoloError {
     VoloError::Other(format!("{}: {}", context, error))
 }
@@ -471,7 +500,7 @@ fn execute_source_sync(
     source: String,
     args: Value,
     timeout: Duration,
-    host: Option<HeadlessPluginHost>,
+    host: Option<Arc<dyn HeadlessHost>>,
 ) -> Result<Value> {
     let runtime =
         Runtime::new().map_err(|error| js_error("create headless QuickJS runtime", error))?;
@@ -536,7 +565,7 @@ async fn execute_source_with_timeout(
     source: &str,
     args: Value,
     timeout: Duration,
-    host: Option<HeadlessPluginHost>,
+    host: Option<Arc<dyn HeadlessHost>>,
 ) -> Result<Value> {
     let source = source.to_string();
     tokio::task::spawn_blocking(move || execute_source_sync(source, args, timeout, host))
@@ -546,6 +575,16 @@ async fn execute_source_with_timeout(
 
 pub async fn execute_source(source: &str, args: Value) -> Result<Value> {
     execute_source_with_timeout(source, args, HEADLESS_TOOL_TIMEOUT, None).await
+}
+
+#[cfg(test)]
+pub(crate) async fn execute_source_with_test_host(
+    source: &str,
+    args: Value,
+    timeout: Duration,
+    host: Arc<dyn HeadlessHost>,
+) -> Result<Value> {
+    execute_source_with_timeout(source, args, timeout, Some(host)).await
 }
 
 /// Resolve an LLM plugin-tool name to the installed, enabled plugin and execute its source
@@ -579,7 +618,8 @@ pub async fn execute_plugin_tool(
         ))
     })?;
 
-    let host = HeadlessPluginHost::new(app.clone(), principal, &plugin);
+    let host: Arc<dyn HeadlessHost> =
+        Arc::new(HeadlessPluginHost::new(app.clone(), principal, &plugin));
     execute_source_with_timeout(&source, args, HEADLESS_TOOL_TIMEOUT, Some(host)).await
 }
 
