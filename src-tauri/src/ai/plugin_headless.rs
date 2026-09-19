@@ -19,6 +19,8 @@ use rquickjs::{Context, Function, Promise, Runtime};
 use serde_json::{json, Value};
 use tauri::{AppHandle, Manager};
 use tauri_plugin_clipboard_manager::ClipboardExt;
+#[cfg(not(target_os = "macos"))]
+use tauri_plugin_notification::NotificationExt;
 
 use crate::api::database::Database;
 use crate::core::permission::{enforce_background, PermissionEngine};
