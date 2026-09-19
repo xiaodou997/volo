@@ -1,11 +1,11 @@
 //! 剪贴板 API
 
-use tauri::{AppHandle, State};
-use tauri_plugin_clipboard_manager::ClipboardExt;
 use crate::core::permission::{require, PermissionEngine};
 use crate::error::Result;
 use crate::plugin::manager::PluginState;
 use base64::Engine;
+use tauri::{AppHandle, State};
+use tauri_plugin_clipboard_manager::ClipboardExt;
 
 /// 读取剪贴板文本
 #[tauri::command]
@@ -15,9 +15,18 @@ pub async fn clipboard_read_text(
     plugins: State<'_, PluginState>,
     plugin_id: Option<String>,
 ) -> Result<String> {
-    require(&app, &engine, &plugins, plugin_id.as_deref(), "clipboard.read", None).await?;
+    require(
+        &app,
+        &engine,
+        &plugins,
+        plugin_id.as_deref(),
+        "clipboard.read",
+        None,
+    )
+    .await?;
 
-    app.clipboard().read_text()
+    app.clipboard()
+        .read_text()
         .map_err(|e| crate::error::VoloError::Other(e.to_string()))
 }
 
@@ -30,9 +39,18 @@ pub async fn clipboard_write_text(
     plugin_id: Option<String>,
     text: String,
 ) -> Result<()> {
-    require(&app, &engine, &plugins, plugin_id.as_deref(), "clipboard.write", None).await?;
+    require(
+        &app,
+        &engine,
+        &plugins,
+        plugin_id.as_deref(),
+        "clipboard.write",
+        None,
+    )
+    .await?;
 
-    app.clipboard().write_text(&text)
+    app.clipboard()
+        .write_text(&text)
         .map_err(|e| crate::error::VoloError::Other(e.to_string()))
 }
 
@@ -44,13 +62,20 @@ pub async fn clipboard_read_image(
     plugins: State<'_, PluginState>,
     plugin_id: Option<String>,
 ) -> Result<Option<String>> {
-    require(&app, &engine, &plugins, plugin_id.as_deref(), "clipboard.read", None).await?;
+    require(
+        &app,
+        &engine,
+        &plugins,
+        plugin_id.as_deref(),
+        "clipboard.read",
+        None,
+    )
+    .await?;
 
     #[cfg(target_os = "macos")]
     {
         // 使用 pngpaste 读取剪贴板图片
-        let output = std::process::Command::new("pngpaste")
-            .output();
+        let output = std::process::Command::new("pngpaste").output();
 
         match output {
             Ok(output) if output.status.success() && !output.stdout.is_empty() => {
@@ -77,7 +102,15 @@ pub async fn clipboard_write_image(
     plugin_id: Option<String>,
     base64: String,
 ) -> Result<()> {
-    require(&app, &engine, &plugins, plugin_id.as_deref(), "clipboard.write", None).await?;
+    require(
+        &app,
+        &engine,
+        &plugins,
+        plugin_id.as_deref(),
+        "clipboard.write",
+        None,
+    )
+    .await?;
 
     // 移除 data:image/xxx;base64, 前缀
     let base64_data = if base64.contains(",") {
@@ -128,7 +161,15 @@ pub async fn clipboard_read_files(
     plugins: State<'_, PluginState>,
     plugin_id: Option<String>,
 ) -> Result<Vec<String>> {
-    require(&app, &engine, &plugins, plugin_id.as_deref(), "clipboard.read", None).await?;
+    require(
+        &app,
+        &engine,
+        &plugins,
+        plugin_id.as_deref(),
+        "clipboard.read",
+        None,
+    )
+    .await?;
 
     #[cfg(target_os = "macos")]
     {

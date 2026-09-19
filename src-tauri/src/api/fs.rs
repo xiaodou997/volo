@@ -131,10 +131,7 @@ fn canonicalize_entry_no_follow_plugin_path(input: &str) -> Result<PathBuf> {
         ))
     })?;
     let parent = path.parent().ok_or_else(|| {
-        VoloError::PermissionDenied(format!(
-            "Plugin filesystem path has no parent: {}",
-            input
-        ))
+        VoloError::PermissionDenied(format!("Plugin filesystem path has no parent: {}", input))
     })?;
 
     let mut resolved_parent = std::fs::canonicalize(parent).map_err(|e| {
@@ -148,11 +145,7 @@ fn canonicalize_entry_no_follow_plugin_path(input: &str) -> Result<PathBuf> {
 }
 
 /// 仅对插件调用启用安全路径解析；主窗口自身保持原路径语义。
-fn resolve_io_path(
-    plugin_id: Option<&str>,
-    path: &str,
-    mode: PluginPathMode,
-) -> Result<PathBuf> {
+fn resolve_io_path(plugin_id: Option<&str>, path: &str, mode: PluginPathMode) -> Result<PathBuf> {
     if plugin_id.is_none() {
         return Ok(PathBuf::from(path));
     }
@@ -225,11 +218,7 @@ pub async fn fs_read(
     plugin_id: Option<String>,
     path: String,
 ) -> Result<String> {
-    let resolved = resolve_io_path(
-        plugin_id.as_deref(),
-        &path,
-        PluginPathMode::ExistingFollow,
-    )?;
+    let resolved = resolve_io_path(plugin_id.as_deref(), &path, PluginPathMode::ExistingFollow)?;
     require_path(
         &app,
         &engine,
@@ -255,11 +244,7 @@ pub async fn fs_read_binary(
     plugin_id: Option<String>,
     path: String,
 ) -> Result<String> {
-    let resolved = resolve_io_path(
-        plugin_id.as_deref(),
-        &path,
-        PluginPathMode::ExistingFollow,
-    )?;
+    let resolved = resolve_io_path(plugin_id.as_deref(), &path, PluginPathMode::ExistingFollow)?;
     require_path(
         &app,
         &engine,
@@ -287,11 +272,7 @@ pub async fn fs_write(
     path: String,
     content: String,
 ) -> Result<()> {
-    let resolved = resolve_io_path(
-        plugin_id.as_deref(),
-        &path,
-        PluginPathMode::CreationFollow,
-    )?;
+    let resolved = resolve_io_path(plugin_id.as_deref(), &path, PluginPathMode::CreationFollow)?;
     require_path(
         &app,
         &engine,
@@ -323,11 +304,7 @@ pub async fn fs_write_binary(
     path: String,
     content: String,
 ) -> Result<()> {
-    let resolved = resolve_io_path(
-        plugin_id.as_deref(),
-        &path,
-        PluginPathMode::CreationFollow,
-    )?;
+    let resolved = resolve_io_path(plugin_id.as_deref(), &path, PluginPathMode::CreationFollow)?;
     require_path(
         &app,
         &engine,
@@ -363,11 +340,7 @@ pub async fn fs_exists(
     plugin_id: Option<String>,
     path: String,
 ) -> Result<bool> {
-    let resolved = resolve_io_path(
-        plugin_id.as_deref(),
-        &path,
-        PluginPathMode::CreationFollow,
-    )?;
+    let resolved = resolve_io_path(plugin_id.as_deref(), &path, PluginPathMode::CreationFollow)?;
     require_path(
         &app,
         &engine,
@@ -393,11 +366,7 @@ pub async fn fs_mkdir(
     plugin_id: Option<String>,
     path: String,
 ) -> Result<()> {
-    let resolved = resolve_io_path(
-        plugin_id.as_deref(),
-        &path,
-        PluginPathMode::CreationFollow,
-    )?;
+    let resolved = resolve_io_path(plugin_id.as_deref(), &path, PluginPathMode::CreationFollow)?;
     require_path(
         &app,
         &engine,
@@ -424,11 +393,7 @@ pub async fn fs_remove(
     plugin_id: Option<String>,
     path: String,
 ) -> Result<()> {
-    let resolved = resolve_io_path(
-        plugin_id.as_deref(),
-        &path,
-        PluginPathMode::EntryNoFollow,
-    )?;
+    let resolved = resolve_io_path(plugin_id.as_deref(), &path, PluginPathMode::EntryNoFollow)?;
     require_path(
         &app,
         &engine,
@@ -474,11 +439,7 @@ pub async fn fs_list(
     plugin_id: Option<String>,
     path: String,
 ) -> Result<Vec<FileInfo>> {
-    let resolved = resolve_io_path(
-        plugin_id.as_deref(),
-        &path,
-        PluginPathMode::ExistingFollow,
-    )?;
+    let resolved = resolve_io_path(plugin_id.as_deref(), &path, PluginPathMode::ExistingFollow)?;
     require_path(
         &app,
         &engine,
@@ -699,7 +660,10 @@ mod tests {
 
         let requested = allowed.join("link/new.txt");
         let resolved = canonicalize_creation_plugin_path(&requested.to_string_lossy()).unwrap();
-        assert_eq!(resolved, std::fs::canonicalize(&outside).unwrap().join("new.txt"));
+        assert_eq!(
+            resolved,
+            std::fs::canonicalize(&outside).unwrap().join("new.txt")
+        );
         assert!(!resolved.starts_with(std::fs::canonicalize(&allowed).unwrap()));
 
         let _ = std::fs::remove_dir_all(&root);
@@ -737,8 +701,7 @@ mod tests {
         let link = allowed.join("link.txt");
         symlink(&target, &link).unwrap();
 
-        let resolved =
-            canonicalize_entry_no_follow_plugin_path(&link.to_string_lossy()).unwrap();
+        let resolved = canonicalize_entry_no_follow_plugin_path(&link.to_string_lossy()).unwrap();
         let expected = std::fs::canonicalize(&allowed).unwrap().join("link.txt");
         assert_eq!(resolved, expected);
         assert_ne!(resolved, std::fs::canonicalize(&target).unwrap());
@@ -749,8 +712,8 @@ mod tests {
     #[test]
     fn test_system_path_is_not_rewritten() {
         let raw = PathBuf::from("relative/../system-path");
-        let resolved = resolve_io_path(None, raw.to_str().unwrap(), PluginPathMode::CreationFollow)
-            .unwrap();
+        let resolved =
+            resolve_io_path(None, raw.to_str().unwrap(), PluginPathMode::CreationFollow).unwrap();
         assert_eq!(resolved, raw);
     }
 }

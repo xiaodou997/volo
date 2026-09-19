@@ -262,6 +262,9 @@ mod tests {
     #[test]
     fn persisted_id_has_bounded_filename_length() {
         let id = "x".repeat(MAX_PERSISTED_WORKFLOW_ID_BYTES + 1);
-        assert!(workflow_file_name(&id).unwrap_err().to_string().contains("过长"));
+        assert!(workflow_file_name(&id)
+            .unwrap_err()
+            .to_string()
+            .contains("过长"));
     }
 }

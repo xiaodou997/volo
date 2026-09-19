@@ -6,6 +6,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- macOS 27 通知静默失败：tauri-plugin-notification → notify-rust → mac-notification-sys 底层使用 `NSUserNotificationCenter`（objc/notify.m），该 API 已在 macOS 27 移除，且插件层 `let _ = show()` 吞掉全部错误只返回假 `Ok`。新增 `notification_macos` 原生桥，改用 `UNUserNotificationCenter`（objc2 + block2，依赖树已有）：真实授权状态查询（notDetermined/denied/authorized）、未授权自动申请（被拒返回明确错误）、投递错误如实上报；`notification_show` / 通知权限引导 / `notification_show` 工具 / headless `notification.show` 四条路径统一接入。前置条件：应用须经有效签名（macOS 26+ 系统要求，Developer ID / Apple Development 均可），adhoc 签名会被系统拒绝注册
+
 ### Added
 - 通知权限引导（#49）：tauri-plugin-notification 桌面端权限 API 为硬编码 Granted stub，真实授权由系统在首条通知后注册应用决定。新增 `notification_permission_status` / `notification_request_permission`（发送可观察的引导通知）/ `notification_open_settings`（macOS 直达 系统设置 → 通知 → Volo）三个命令；Automation 面板新增"通知权限"卡片，可一键发送测试通知并跳转系统通知设置
 

@@ -5,6 +5,7 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use tauri::AppHandle;
 use tauri_plugin_clipboard_manager::ClipboardExt;
+#[cfg(not(target_os = "macos"))]
 use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_opener::OpenerExt;
 
@@ -133,7 +134,8 @@ impl ToolRegistry {
             },
             ToolSpec {
                 name: "skill_load".to_string(),
-                description: "加载指定技能的完整指令（用户意图与某个可用技能匹配时调用）".to_string(),
+                description: "加载指定技能的完整指令（用户意图与某个可用技能匹配时调用）"
+                    .to_string(),
                 parameters: json!({
                     "type": "object",
                     "properties": {
@@ -253,22 +255,13 @@ impl ToolRegistry {
                 Ok(Value::String(Self::truncate(&content)))
             }
             "notification_show" => {
-                let body = args
-                    .get("body")
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| {
-                        VoloError::Other("notification_show 缺少必填参数 body".to_string())
-                    })?;
-                let title = args
-                    .get("title")
-                    .and_then(Value::as_str)
-                    .unwrap_or("Volo");
-                app.notification()
-                    .builder()
-                    .title(title)
-                    .body(body)
-                    .show()
-                    .map_err(|e| VoloError::Other(format!("Notification failed: {}", e)))?;
+                let body = args.get("body").and_then(Value::as_str).ok_or_else(|| {
+                    VoloError::Other("notification_show 缺少必填参数 body".to_string())
+                })?;
+                let title = args.get("title").and_then(Value::as_str).unwrap_or("Volo");
+                // macOS 走 UNUserNotificationCenter 原生桥（旧 NSUserNotification
+                // 已移除）；失败会携带真实原因返回，而不是插件路径的静默 Ok。
+                crate::api::notification::show_system_notification(app, title, body)?;
                 Ok(Value::String("通知已发送".to_string()))
             }
             "fs_write" => {
@@ -279,19 +272,14 @@ impl ToolRegistry {
                 let content = args
                     .get("content")
                     .and_then(Value::as_str)
-                    .ok_or_else(|| {
-                        VoloError::Other("fs_write 缺少必填参数 content".to_string())
-                    })?;
+                    .ok_or_else(|| VoloError::Other("fs_write 缺少必填参数 content".to_string()))?;
                 std::fs::write(Self::expand_tilde(path), content)?;
                 Ok(Value::String(format!("写入 {} 字节", content.len())))
             }
             "shell_open" => {
-                let target = args
-                    .get("target")
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| {
-                        VoloError::Other("shell_open 缺少必填参数 target".to_string())
-                    })?;
+                let target = args.get("target").and_then(Value::as_str).ok_or_else(|| {
+                    VoloError::Other("shell_open 缺少必填参数 target".to_string())
+                })?;
                 // http(s) 用 open_url，其余按本地路径用 open_path（先展开 `~`）
                 if target.starts_with("http://") || target.starts_with("https://") {
                     app.opener()
@@ -306,12 +294,9 @@ impl ToolRegistry {
                 Ok(Value::String(format!("已打开 {}", target)))
             }
             "clipboard_write" => {
-                let text = args
-                    .get("text")
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| {
-                        VoloError::Other("clipboard_write 缺少必填参数 text".to_string())
-                    })?;
+                let text = args.get("text").and_then(Value::as_str).ok_or_else(|| {
+                    VoloError::Other("clipboard_write 缺少必填参数 text".to_string())
+                })?;
                 app.clipboard()
                     .write_text(text)
                     .map_err(|e| VoloError::Other(format!("Clipboard write failed: {}", e)))?;
@@ -322,10 +307,8 @@ impl ToolRegistry {
                     .get("name")
                     .and_then(Value::as_str)
                     .ok_or_else(|| VoloError::Other("skill_load 缺少必填参数 name".to_string()))?;
-                let body = crate::ai::skill::load_skill_body(
-                    &crate::ai::skill::skills_dir(app)?,
-                    name,
-                )?;
+                let body =
+                    crate::ai::skill::load_skill_body(&crate::ai::skill::skills_dir(app)?, name)?;
                 Ok(Value::String(body))
             }
             _ => unreachable!("capability_of 已过滤未知工具"),
@@ -421,10 +404,7 @@ mod tests {
             ToolRegistry::expand_tilde("~/Desktop/a.txt"),
             home.join("Desktop/a.txt").to_string_lossy()
         );
-        assert_eq!(
-            ToolRegistry::expand_tilde("~"),
-            home.to_string_lossy()
-        );
+        assert_eq!(ToolRegistry::expand_tilde("~"), home.to_string_lossy());
         // 非 ~ 路径原样返回
         assert_eq!(ToolRegistry::expand_tilde("/tmp/a.txt"), "/tmp/a.txt");
         // 中间的 ~ 不展开
@@ -445,14 +425,8 @@ mod tests {
             assert!(ToolRegistry::capability_of(&spec.name).is_some());
         }
 
-        assert_eq!(
-            ToolRegistry::capability_of("fs_read"),
-            Some("fs.read")
-        );
-        assert_eq!(
-            ToolRegistry::capability_of("fs_write"),
-            Some("fs.write")
-        );
+        assert_eq!(ToolRegistry::capability_of("fs_read"), Some("fs.read"));
+        assert_eq!(ToolRegistry::capability_of("fs_write"), Some("fs.write"));
         assert_eq!(
             ToolRegistry::capability_of("shell_open"),
             Some("shell.open")
@@ -486,10 +460,7 @@ mod tests {
         let shell_open = specs.iter().find(|s| s.name == "shell_open").unwrap();
         assert_eq!(shell_open.parameters["required"], json!(["target"]));
 
-        let clipboard_write = specs
-            .iter()
-            .find(|s| s.name == "clipboard_write")
-            .unwrap();
+        let clipboard_write = specs.iter().find(|s| s.name == "clipboard_write").unwrap();
         assert_eq!(clipboard_write.parameters["required"], json!(["text"]));
     }
 

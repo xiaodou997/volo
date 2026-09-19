@@ -32,9 +32,9 @@ use super::tools::ToolSpec;
 
 pub use http::McpHttpClient;
 pub use protocol::McpToolInfo;
-pub use stdio::McpConnection;
 #[cfg(test)]
 use protocol::{parse_sse_response, rpc_outcome, PROTOCOL_VERSION};
+pub use stdio::McpConnection;
 
 /// 单 server 连接（含握手 + tools/list）超时
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -113,7 +113,11 @@ impl McpRegistry {
                     }
                 }
                 Ok(Err(e)) => warn!("MCP server {} 连接失败: {}", name, e),
-                Err(_) => warn!("MCP server {} 连接超时（{} 秒）", name, CONNECT_TIMEOUT.as_secs()),
+                Err(_) => warn!(
+                    "MCP server {} 连接超时（{} 秒）",
+                    name,
+                    CONNECT_TIMEOUT.as_secs()
+                ),
             }
         }
     }
@@ -176,7 +180,9 @@ impl McpRegistry {
                     description: format!(
                         "[MCP:{}] {}",
                         server,
-                        tool.description.clone().unwrap_or_else(|| tool.name.clone())
+                        tool.description
+                            .clone()
+                            .unwrap_or_else(|| tool.name.clone())
                     ),
                     parameters: tool.input_schema.clone(),
                 });
@@ -207,11 +213,7 @@ impl McpRegistry {
                 if sanitize(server) != san_server {
                     continue;
                 }
-                if let Some(tool) = conn
-                    .tools()
-                    .iter()
-                    .find(|t| sanitize(&t.name) == san_tool)
-                {
+                if let Some(tool) = conn.tools().iter().find(|t| sanitize(&t.name) == san_tool) {
                     found = Some((conn.clone(), tool.name.clone()));
                     break;
                 }
@@ -443,7 +445,9 @@ mod tests {
             }
         });
         let (client_read, client_write) = tokio::io::split(client);
-        let conn = McpConnection::connect(client_read, client_write).await.unwrap();
+        let conn = McpConnection::connect(client_read, client_write)
+            .await
+            .unwrap();
 
         let err = conn
             .call_tool_with_timeout("anything", json!({}), Duration::from_millis(100))
@@ -508,7 +512,9 @@ mod tests {
             }
         });
         let (client_read, client_write) = tokio::io::split(client);
-        let conn = McpConnection::connect(client_read, client_write).await.unwrap();
+        let conn = McpConnection::connect(client_read, client_write)
+            .await
+            .unwrap();
 
         let (a, b) = tokio::join!(
             conn.call_tool("echo", json!({ "text": "A" })),
@@ -525,10 +531,7 @@ mod tests {
         let llm_name = format!("{}{}", MCP_NAME_PREFIX, name);
         assert_eq!(llm_name, "mcp__my_server__echo_tool");
         let rest = llm_name.strip_prefix(MCP_NAME_PREFIX).unwrap();
-        assert_eq!(
-            rest.split_once("__"),
-            Some(("my_server", "echo_tool"))
-        );
+        assert_eq!(rest.split_once("__"), Some(("my_server", "echo_tool")));
     }
 
     #[test]
@@ -551,13 +554,14 @@ mod tests {
                     event: message\n\
                     data: {\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"ok\":true}}\n\
                     \n";
-        assert_eq!(
-            parse_sse_response(body, 2).unwrap(),
-            json!({ "ok": true })
-        );
+        assert_eq!(parse_sse_response(body, 2).unwrap(), json!({ "ok": true }));
         assert!(parse_sse_response(body, 99).is_err());
-        let err_body = "data: {\"jsonrpc\":\"2.0\",\"id\":1,\"error\":{\"code\":-1,\"message\":\"bad\"}}\n\n";
-        assert!(parse_sse_response(err_body, 1).unwrap_err().to_string().contains("bad"));
+        let err_body =
+            "data: {\"jsonrpc\":\"2.0\",\"id\":1,\"error\":{\"code\":-1,\"message\":\"bad\"}}\n\n";
+        assert!(parse_sse_response(err_body, 1)
+            .unwrap_err()
+            .to_string()
+            .contains("bad"));
     }
 
     #[tokio::test]
@@ -606,7 +610,9 @@ mod tests {
                         }
                     }
                     let msg: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
-                    let has_sid = headers.to_ascii_lowercase().contains("mcp-session-id: sid-123");
+                    let has_sid = headers
+                        .to_ascii_lowercase()
+                        .contains("mcp-session-id: sid-123");
                     let method = msg.get("method").and_then(Value::as_str).unwrap_or("");
                     let id = msg.get("id").cloned().unwrap_or(Value::Null);
 

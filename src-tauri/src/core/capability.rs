@@ -127,7 +127,10 @@ mod tests {
         assert_eq!(capability_meta("screen.capture").risk, RiskLevel::Medium);
         assert_eq!(capability_meta("fs.read").risk, RiskLevel::Medium);
         assert_eq!(capability_meta("shell.open").risk, RiskLevel::Medium);
-        assert_eq!(capability_meta("mcp.call:mcp__server__tool").risk, RiskLevel::Medium);
+        assert_eq!(
+            capability_meta("mcp.call:mcp__server__tool").risk,
+            RiskLevel::Medium
+        );
 
         assert_eq!(capability_meta("fs.write").risk, RiskLevel::High);
         assert_eq!(capability_meta("shell.execute").risk, RiskLevel::High);

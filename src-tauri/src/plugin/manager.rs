@@ -1,16 +1,16 @@
 //! 插件管理器
 
+use crate::error::{Result, VoloError};
+use crate::search::FeatureInfo;
+use notify::{RecursiveMode, Watcher};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Duration;
-use notify::{RecursiveMode, Watcher};
 use tauri::{AppHandle, Emitter, Manager};
 use tracing::{info, warn};
-use crate::error::{Result, VoloError};
-use crate::search::FeatureInfo;
 
 const DISABLED_MARKER: &str = ".disabled";
 
@@ -185,7 +185,10 @@ impl PluginState {
             let was_disabled = is_plugin_disabled(&target);
             if target.exists() {
                 if let Err(e) = std::fs::remove_dir_all(&target) {
-                    warn!("Failed to remove outdated builtin plugin {}: {}", plugin.id, e);
+                    warn!(
+                        "Failed to remove outdated builtin plugin {}: {}",
+                        plugin.id, e
+                    );
                     continue;
                 }
             }
@@ -205,7 +208,9 @@ impl PluginState {
 
     /// 扫描插件目录，只把启用插件注册进运行时。
     pub fn scan_plugins(&self) -> Result<()> {
-        let mut plugins = self.plugins.lock()
+        let mut plugins = self
+            .plugins
+            .lock()
             .map_err(|_| VoloError::Other("Lock error".to_string()))?;
 
         plugins.clear();
@@ -300,17 +305,18 @@ impl PluginState {
         let dir = self.plugins_dir.clone();
         let (tx, rx) = std::sync::mpsc::channel::<()>();
 
-        let mut watcher = match notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
-            if res.is_ok() {
-                let _ = tx.send(());
-            }
-        }) {
-            Ok(w) => w,
-            Err(e) => {
-                warn!("Failed to create plugin watcher: {}", e);
-                return;
-            }
-        };
+        let mut watcher =
+            match notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
+                if res.is_ok() {
+                    let _ = tx.send(());
+                }
+            }) {
+                Ok(w) => w,
+                Err(e) => {
+                    warn!("Failed to create plugin watcher: {}", e);
+                    return;
+                }
+            };
         if let Err(e) = watcher.watch(&dir, RecursiveMode::Recursive) {
             warn!("Failed to watch plugins dir {:?}: {}", dir, e);
             return;
@@ -365,7 +371,10 @@ impl PluginState {
     pub fn install_from_dir(&self, source_dir: &PathBuf) -> Result<Plugin> {
         // 验证源目录
         if !source_dir.exists() {
-            return Err(VoloError::Other(format!("Source directory not found: {:?}", source_dir)));
+            return Err(VoloError::Other(format!(
+                "Source directory not found: {:?}",
+                source_dir
+            )));
         }
 
         // 加载插件信息
@@ -394,7 +403,9 @@ impl PluginState {
         };
 
         // 更新内存缓存：禁用插件不注册进运行时
-        let mut plugins = self.plugins.lock()
+        let mut plugins = self
+            .plugins
+            .lock()
             .map_err(|_| VoloError::Other("Lock error".to_string()))?;
         if was_disabled {
             plugins.remove(&installed_plugin.id);
@@ -402,7 +413,10 @@ impl PluginState {
             plugins.insert(installed_plugin.id.clone(), installed_plugin.clone());
         }
 
-        info!("Installed plugin: {} ({})", installed_plugin.name, installed_plugin.id);
+        info!(
+            "Installed plugin: {} ({})",
+            installed_plugin.name, installed_plugin.id
+        );
         Ok(installed_plugin)
     }
 
@@ -416,7 +430,9 @@ impl PluginState {
         }
 
         // 从内存缓存移除
-        let mut plugins = self.plugins.lock()
+        let mut plugins = self
+            .plugins
+            .lock()
             .map_err(|_| VoloError::Other("Lock error".to_string()))?;
         plugins.remove(id);
 
@@ -515,7 +531,12 @@ fn load_plugin_from_dir(dir: &PathBuf) -> Result<Plugin> {
                 tool.id
             )));
         }
-        if tool.parameters.get("type").and_then(serde_json::Value::as_str) != Some("object") {
+        if tool
+            .parameters
+            .get("type")
+            .and_then(serde_json::Value::as_str)
+            != Some("object")
+        {
             return Err(VoloError::Plugin(format!(
                 "Tool '{}' parameters must be an object-type JSON Schema",
                 tool.id
@@ -553,8 +574,7 @@ pub fn list_plugins(state: tauri::State<'_, PluginState>) -> Result<Vec<Installe
 
 #[tauri::command]
 pub fn get_plugin(id: String, state: tauri::State<'_, PluginState>) -> Result<Plugin> {
-    state.get_plugin(&id)
-        .ok_or_else(|| VoloError::NotFound(id))
+    state.get_plugin(&id).ok_or_else(|| VoloError::NotFound(id))
 }
 
 #[tauri::command]
@@ -584,10 +604,7 @@ pub fn install_plugin_from_dir(
 }
 
 #[tauri::command]
-pub fn uninstall_plugin(
-    id: String,
-    state: tauri::State<'_, PluginState>,
-) -> Result<()> {
+pub fn uninstall_plugin(id: String, state: tauri::State<'_, PluginState>) -> Result<()> {
     state.uninstall(&id)
 }
 
@@ -597,7 +614,9 @@ pub async fn install_plugin(
     _source: String,
     _state: tauri::State<'_, PluginState>,
 ) -> Result<Plugin> {
-    Err(VoloError::Plugin("Use install_plugin_from_dir instead".to_string()))
+    Err(VoloError::Plugin(
+        "Use install_plugin_from_dir instead".to_string(),
+    ))
 }
 
 #[cfg(test)]
@@ -605,7 +624,11 @@ mod tests {
     use super::*;
 
     fn temp_plugin_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("volo_plugin_test_{}_{}", name, uuid::Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!(
+            "volo_plugin_test_{}_{}",
+            name,
+            uuid::Uuid::new_v4()
+        ));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -666,7 +689,10 @@ mod tests {
         assert_eq!(cmd.id, "gen-uuid");
         assert_eq!(cmd.name, "Generate UUID");
         assert_eq!(cmd.keywords, vec!["uuid"]);
-        assert_eq!(cmd.description.as_deref(), Some("Generate a UUID and copy it"));
+        assert_eq!(
+            cmd.description.as_deref(),
+            Some("Generate a UUID and copy it")
+        );
         assert_eq!(cmd.run, "command.js");
         assert_eq!(cmd.icon.as_deref(), Some("icon.png"));
         // manifest 缺省 mode 时默认为 "run"
@@ -731,7 +757,8 @@ mod tests {
     #[test]
     fn test_should_reseed() {
         // 目标目录不存在 → 需要播种
-        let missing = std::env::temp_dir().join(format!("volo_reseed_missing_{}", uuid::Uuid::new_v4()));
+        let missing =
+            std::env::temp_dir().join(format!("volo_reseed_missing_{}", uuid::Uuid::new_v4()));
         assert!(should_reseed(&missing, "1.0.0"));
 
         let dir = temp_plugin_dir("reseed");

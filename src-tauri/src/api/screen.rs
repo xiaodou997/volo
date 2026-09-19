@@ -16,10 +16,8 @@ use base64::Engine;
 pub(crate) fn capture_screen_image() -> Result<String> {
     #[cfg(target_os = "macos")]
     {
-        let temp_file = std::env::temp_dir().join(format!(
-            "volo_capture_{}.png",
-            uuid::Uuid::new_v4()
-        ));
+        let temp_file =
+            std::env::temp_dir().join(format!("volo_capture_{}.png", uuid::Uuid::new_v4()));
 
         let result = (|| -> Result<String> {
             let output = std::process::Command::new("screencapture")
@@ -102,9 +100,7 @@ pub async fn screen_capture_area(
             .arg("-s")
             .arg(&temp_file)
             .output()
-            .map_err(|error| {
-                VoloError::Other(format!("Failed to capture screen: {}", error))
-            })?;
+            .map_err(|error| VoloError::Other(format!("Failed to capture screen: {}", error)))?;
 
         if !output.status.success() {
             return Err(VoloError::Other(

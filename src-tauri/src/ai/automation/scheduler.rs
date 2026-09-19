@@ -119,11 +119,8 @@ async fn execute_claim(app: &AppHandle, dir: &Path, claim: DueAutomation) {
         }
     };
 
-    let run_context = WorkflowRunContext::automation(
-        automation_id.clone(),
-        scheduled_for,
-        retry_attempt,
-    );
+    let run_context =
+        WorkflowRunContext::automation(automation_id.clone(), scheduled_for, retry_attempt);
 
     match run_workflow_background(app.clone(), workflow, None, run_context).await {
         Ok(execution) => {
@@ -163,9 +160,7 @@ mod tests {
     use chrono::{Duration as ChronoDuration, TimeZone};
     use serde_json::{json, Value};
 
-    use crate::ai::automation::storage::{
-        list_automations, save_automation,
-    };
+    use crate::ai::automation::storage::{list_automations, save_automation};
     use crate::ai::automation::{AutomationTrigger, WorkflowAutomation};
     use crate::ai::tool_executor::ToolExecutor;
     use crate::ai::workflow::commands::{history, storage as workflow_storage};
@@ -263,9 +258,7 @@ mod tests {
             id: "scheduled-smoke-job".to_string(),
             workflow_id: workflow.id.clone(),
             enabled: true,
-            trigger: AutomationTrigger::Interval {
-                every_minutes: 15,
-            },
+            trigger: AutomationTrigger::Interval { every_minutes: 15 },
             retry_policy: None,
         };
         save_automation(&automations_dir, automation, at(12, 0)).unwrap();
@@ -276,11 +269,8 @@ mod tests {
         assert_eq!(claim.automation.workflow_id, workflow.id);
         assert_eq!(claim.scheduled_for, at(12, 15));
 
-        let persisted = workflow_storage::load_workflow(
-            &workflows_dir,
-            &claim.automation.workflow_id,
-        )
-        .unwrap();
+        let persisted =
+            workflow_storage::load_workflow(&workflows_dir, &claim.automation.workflow_id).unwrap();
         let executor = SmokeToolExecutor;
         let runner = WorkflowToolRunner::new(&executor);
         let execution = execute_workflow(&persisted, Value::Null, &runner)
@@ -316,8 +306,14 @@ mod tests {
         assert_eq!(runs.len(), 1);
         assert_eq!(runs[0].workflow_id, persisted.id);
         assert_eq!(runs[0].source, history::WorkflowRunSource::Automation);
-        assert_eq!(runs[0].automation_id.as_deref(), Some("scheduled-smoke-job"));
-        assert_eq!(runs[0].scheduled_for.as_deref(), Some("2026-09-18T12:15:00.000Z"));
+        assert_eq!(
+            runs[0].automation_id.as_deref(),
+            Some("scheduled-smoke-job")
+        );
+        assert_eq!(
+            runs[0].scheduled_for.as_deref(),
+            Some("2026-09-18T12:15:00.000Z")
+        );
         assert_eq!(runs[0].retry_attempt, None);
         assert_eq!(runs[0].status, WorkflowExecutionStatus::Completed);
         assert_eq!(runs[0].steps.len(), 1);

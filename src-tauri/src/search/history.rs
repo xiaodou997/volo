@@ -5,11 +5,11 @@
 //! - 应用：app path（/ 开头，历史数据沿用此 key）
 //! - 插件功能/命令：`{plugin_id}#{feature_or_command_id}`
 
-use rusqlite::{Connection, params};
+use crate::error::{Result, VoloError};
+use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::Mutex;
-use crate::error::{Result, VoloError};
 
 /// 搜索历史记录
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -46,7 +46,9 @@ impl SearchHistoryManager {
 
     /// 记录结果项使用
     pub fn record_usage(&self, item_key: &str) -> Result<()> {
-        let conn = self.conn.lock()
+        let conn = self
+            .conn
+            .lock()
             .map_err(|_| VoloError::Other("Database lock error".to_string()))?;
 
         let now = chrono::Utc::now().timestamp();
@@ -65,7 +67,9 @@ impl SearchHistoryManager {
 
     /// 获取结果项的使用次数
     pub fn get_usage_count(&self, item_key: &str) -> u32 {
-        self.get_stats(item_key).map(|(count, _)| count).unwrap_or(0)
+        self.get_stats(item_key)
+            .map(|(count, _)| count)
+            .unwrap_or(0)
     }
 
     /// 获取 (使用次数, 最近使用时间)；无记录返回 None
@@ -101,29 +105,33 @@ impl SearchHistoryManager {
 
     /// 获取所有历史记录
     pub fn get_all(&self) -> Result<Vec<SearchHistory>> {
-        let conn = self.conn.lock()
+        let conn = self
+            .conn
+            .lock()
             .map_err(|_| VoloError::Other("Database lock error".to_string()))?;
 
-        let mut stmt = conn.prepare(
-            "SELECT app_path, count, last_used FROM search_history ORDER BY count DESC"
-        )?;
+        let mut stmt = conn
+            .prepare("SELECT app_path, count, last_used FROM search_history ORDER BY count DESC")?;
 
-        let history = stmt.query_map([], |row| {
-            Ok(SearchHistory {
-                item_key: row.get(0)?,
-                count: row.get(1)?,
-                last_used: row.get(2)?,
-            })
-        })?
-        .filter_map(|h| h.ok())
-        .collect();
+        let history = stmt
+            .query_map([], |row| {
+                Ok(SearchHistory {
+                    item_key: row.get(0)?,
+                    count: row.get(1)?,
+                    last_used: row.get(2)?,
+                })
+            })?
+            .filter_map(|h| h.ok())
+            .collect();
 
         Ok(history)
     }
 
     /// 清空历史记录
     pub fn clear(&self) -> Result<()> {
-        let conn = self.conn.lock()
+        let conn = self
+            .conn
+            .lock()
             .map_err(|_| VoloError::Other("Database lock error".to_string()))?;
 
         conn.execute("DELETE FROM search_history", [])?;
@@ -151,9 +159,7 @@ pub fn get_search_history(
 }
 
 #[tauri::command]
-pub fn clear_search_history(
-    manager: tauri::State<'_, SearchHistoryManager>,
-) -> Result<()> {
+pub fn clear_search_history(manager: tauri::State<'_, SearchHistoryManager>) -> Result<()> {
     manager.clear()
 }
 

@@ -8,9 +8,7 @@ use tauri::{AppHandle, Manager};
 
 use crate::error::{Result, VoloError};
 
-use super::super::{
-    Workflow, WorkflowExecution, WorkflowExecutionStatus, WorkflowStepStatus,
-};
+use super::super::{Workflow, WorkflowExecution, WorkflowExecutionStatus, WorkflowStepStatus};
 
 const MAX_LISTED_WORKFLOW_RUNS: usize = 100;
 
@@ -260,7 +258,11 @@ pub fn list_runs(dir: &Path, workflow_id: Option<&str>) -> Result<Vec<WorkflowRu
         records.push(record);
     }
 
-    records.sort_by(|a, b| b.started_at.cmp(&a.started_at).then_with(|| b.id.cmp(&a.id)));
+    records.sort_by(|a, b| {
+        b.started_at
+            .cmp(&a.started_at)
+            .then_with(|| b.id.cmp(&a.id))
+    });
     records.truncate(MAX_LISTED_WORKFLOW_RUNS);
     Ok(records)
 }
@@ -268,9 +270,7 @@ pub fn list_runs(dir: &Path, workflow_id: Option<&str>) -> Result<Vec<WorkflowRu
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ai::workflow::{
-        WorkflowExecution, WorkflowStep, WorkflowStepExecution,
-    };
+    use crate::ai::workflow::{WorkflowExecution, WorkflowStep, WorkflowStepExecution};
     use serde_json::json;
 
     fn test_dir() -> PathBuf {

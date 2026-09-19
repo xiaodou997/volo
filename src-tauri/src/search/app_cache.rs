@@ -1,7 +1,8 @@
 //! 应用缓存模块
 //! 提供应用列表的缓存机制，避免每次搜索都扫描文件系统
 
-use rusqlite::{Connection, params};
+use crate::error::{Result, VoloError};
+use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -9,7 +10,6 @@ use std::sync::{Arc, RwLock};
 use tauri::AppHandle;
 use tauri::Manager;
 use tracing::{info, warn};
-use crate::error::{Result, VoloError};
 
 /// 应用信息
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -63,10 +63,7 @@ impl AppCache {
         )?;
 
         // 创建索引
-        db.execute(
-            "CREATE INDEX IF NOT EXISTS idx_apps_name ON apps(name)",
-            [],
-        )?;
+        db.execute("CREATE INDEX IF NOT EXISTS idx_apps_name ON apps(name)", [])?;
 
         drop(db); // 关闭连接，后续通过路径重新打开
 
@@ -83,23 +80,23 @@ impl AppCache {
     /// 从数据库加载缓存
     pub fn load_from_db(&self) -> Result<()> {
         let db = Connection::open(&self.db_path)?;
-        
-        let mut stmt = db.prepare(
-            "SELECT path, name, icon, app_type, pinyin, initials FROM apps"
-        )?;
 
-        let apps = stmt.query_map([], |row| {
-            Ok(AppInfo {
-                path: row.get(0)?,
-                name: row.get(1)?,
-                icon: row.get(2)?,
-                app_type: row.get(3)?,
-                pinyin: row.get(4)?,
-                initials: row.get(5)?,
-            })
-        })?
-        .filter_map(|r| r.ok())
-        .collect::<Vec<_>>();
+        let mut stmt =
+            db.prepare("SELECT path, name, icon, app_type, pinyin, initials FROM apps")?;
+
+        let apps = stmt
+            .query_map([], |row| {
+                Ok(AppInfo {
+                    path: row.get(0)?,
+                    name: row.get(1)?,
+                    icon: row.get(2)?,
+                    app_type: row.get(3)?,
+                    pinyin: row.get(4)?,
+                    initials: row.get(5)?,
+                })
+            })?
+            .filter_map(|r| r.ok())
+            .collect::<Vec<_>>();
 
         // 构建索引
         let mut name_index = HashMap::new();
@@ -107,7 +104,10 @@ impl AppCache {
             name_index.insert(app.name.to_lowercase(), i);
         }
 
-        let mut data = self.data.write().map_err(|_| VoloError::Other("Lock error".to_string()))?;
+        let mut data = self
+            .data
+            .write()
+            .map_err(|_| VoloError::Other("Lock error".to_string()))?;
         data.apps = apps;
         data.name_index = name_index;
         data.loaded = true;
@@ -152,7 +152,10 @@ impl AppCache {
             name_index.insert(app.name.to_lowercase(), i);
         }
 
-        let mut data = self.data.write().map_err(|_| VoloError::Other("Lock error".to_string()))?;
+        let mut data = self
+            .data
+            .write()
+            .map_err(|_| VoloError::Other("Lock error".to_string()))?;
         data.apps = new_apps;
         data.name_index = name_index;
         data.loaded = true;
@@ -219,9 +222,7 @@ impl AppCache {
 
     /// 获取所有应用
     pub fn get_apps(&self) -> Vec<AppInfo> {
-        self.data.read()
-            .map(|d| d.apps.clone())
-            .unwrap_or_default()
+        self.data.read().map(|d| d.apps.clone()).unwrap_or_default()
     }
 
     /// 检查是否已加载
@@ -276,7 +277,8 @@ fn scan_app_dir(dir: &PathBuf) -> Result<Vec<AppInfo>> {
             let path = entry.path();
 
             if path.extension().map_or(false, |ext| ext == "app") {
-                let name = path.file_stem()
+                let name = path
+                    .file_stem()
                     .and_then(|s| s.to_str())
                     .unwrap_or("")
                     .to_string();
@@ -304,7 +306,7 @@ fn scan_app_dir(dir: &PathBuf) -> Result<Vec<AppInfo>> {
 #[cfg(target_os = "windows")]
 fn scan_apps() -> Result<Vec<AppInfo>> {
     use crate::platform::windows;
-    
+
     let mut apps = Vec::new();
     let mut seen_paths = std::collections::HashSet::new();
 
@@ -314,7 +316,7 @@ fn scan_apps() -> Result<Vec<AppInfo>> {
             if seen_paths.insert(path.clone()) {
                 let pinyin = generate_pinyin(&name);
                 let initials = generate_initials(&name);
-                
+
                 apps.push(AppInfo {
                     name,
                     path,
@@ -333,7 +335,7 @@ fn scan_apps() -> Result<Vec<AppInfo>> {
             if seen_paths.insert(path.clone()) {
                 let pinyin = generate_pinyin(&name);
                 let initials = generate_initials(&name);
-                
+
                 apps.push(AppInfo {
                     name,
                     path,
@@ -352,7 +354,7 @@ fn scan_apps() -> Result<Vec<AppInfo>> {
             if seen_paths.insert(path.clone()) {
                 let pinyin = generate_pinyin(&name);
                 let initials = generate_initials(&name);
-                
+
                 apps.push(AppInfo {
                     name,
                     path,
@@ -439,7 +441,9 @@ pub fn get_app_count(cache: tauri::State<'_, AppCache>) -> usize {
 pub fn get_app_icon(path: String, cache: tauri::State<'_, AppCache>) -> Result<Option<String>> {
     // 先从内存缓存获取
     {
-        let data = cache.data.read()
+        let data = cache
+            .data
+            .read()
             .map_err(|_| VoloError::Other("Lock error".to_string()))?;
 
         for app in &data.apps {
@@ -456,11 +460,14 @@ pub fn get_app_icon(path: String, cache: tauri::State<'_, AppCache>) -> Result<O
 
     // 从数据库缓存获取
     let db = Connection::open(&cache.db_path)?;
-    let cached_icon: Option<String> = db.query_row(
-        "SELECT icon FROM apps WHERE path = ?1 AND icon IS NOT NULL AND icon != ''",
-        params![&path],
-        |row| row.get(0),
-    ).ok().flatten();
+    let cached_icon: Option<String> = db
+        .query_row(
+            "SELECT icon FROM apps WHERE path = ?1 AND icon IS NOT NULL AND icon != ''",
+            params![&path],
+            |row| row.get(0),
+        )
+        .ok()
+        .flatten();
 
     if let Some(icon) = cached_icon {
         return Ok(Some(icon));

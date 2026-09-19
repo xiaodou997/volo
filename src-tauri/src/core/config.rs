@@ -418,7 +418,10 @@ mod tests {
                 args: vec![],
                 env: HashMap::from([
                     ("TOKEN".to_string(), "top-secret".to_string()),
-                    ("PATH_HINT".to_string(), "not-secret-but-private".to_string()),
+                    (
+                        "PATH_HINT".to_string(),
+                        "not-secret-but-private".to_string(),
+                    ),
                 ]),
                 url: String::new(),
                 enabled: true,

@@ -173,10 +173,7 @@ mod tests {
                     data: {\"jsonrpc\":\"2.0\",\"id\":9,\"result\":{\"skip\":true}}\n\
                     \n\
                     data: {\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"ok\":true}}\n\n";
-        assert_eq!(
-            parse_sse_response(body, 2).unwrap(),
-            json!({ "ok": true })
-        );
+        assert_eq!(parse_sse_response(body, 2).unwrap(), json!({ "ok": true }));
         assert!(parse_sse_response(body, 99).is_err());
     }
 }

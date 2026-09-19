@@ -1,8 +1,8 @@
 //! 窗口管理模块
 
+use crate::error::Result;
 use tauri::{AppHandle, Manager, WebviewWindow};
 use tauri_plugin_positioner::{Position, WindowExt};
-use crate::error::Result;
 
 /// 窗口管理器
 pub struct WindowManager;

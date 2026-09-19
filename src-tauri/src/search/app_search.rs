@@ -1,20 +1,31 @@
 //! 应用搜索模块
 
-use serde::{Deserialize, Serialize};
+use crate::plugin::manager::PluginState;
 use crate::search::app_cache::{AppCache, AppInfo};
+use crate::search::file_index::FileIndex;
 use crate::search::history::SearchHistoryManager;
 use crate::search::plugin_search::{search_plugins, PluginInfo, PluginSearchResult};
-use crate::search::file_index::FileIndex;
-use crate::plugin::manager::PluginState;
+use serde::{Deserialize, Serialize};
 
 /// 搜索结果
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum SearchResult {
     App(AppInfo),
-    Plugin { plugin: PluginInfo, feature: FeatureInfo },
-    Command { plugin: PluginInfo, command: CommandInfo },
-    File { path: String, name: String, file_type: String, extension: Option<String> },
+    Plugin {
+        plugin: PluginInfo,
+        feature: FeatureInfo,
+    },
+    Command {
+        plugin: PluginInfo,
+        command: CommandInfo,
+    },
+    File {
+        path: String,
+        name: String,
+        file_type: String,
+        extension: Option<String>,
+    },
 }
 
 /// 功能信息
@@ -138,12 +149,19 @@ pub fn search_apps(apps: &[AppInfo], query: &str, history: &SearchHistoryManager
         .map(|app| {
             let frecency = history.get_frecency(&app.path);
             let score = calculate_score(app, query, frecency);
-            ScoredApp { app: app.clone(), score }
+            ScoredApp {
+                app: app.clone(),
+                score,
+            }
         })
         .collect();
 
     // 按评分排序
-    scored_apps.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    scored_apps.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     // 返回前 10 个结果
     scored_apps.into_iter().take(10).map(|s| s.app).collect()

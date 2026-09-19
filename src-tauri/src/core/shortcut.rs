@@ -1,9 +1,9 @@
 //! 快捷键管理模块
 
+use crate::error::{Result, VoloError};
 use std::sync::Mutex;
 use tauri::{AppHandle, Manager};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut};
-use crate::error::{Result, VoloError};
 
 /// 快捷键管理器
 pub struct ShortcutManager {
@@ -26,10 +26,18 @@ impl ShortcutManager {
 
         for part in parts.iter() {
             match part.trim().to_lowercase().as_str() {
-                "cmd" | "command" => modifiers = Some(modifiers.unwrap_or(Modifiers::empty()) | Modifiers::SUPER),
-                "ctrl" | "control" => modifiers = Some(modifiers.unwrap_or(Modifiers::empty()) | Modifiers::CONTROL),
-                "alt" | "option" => modifiers = Some(modifiers.unwrap_or(Modifiers::empty()) | Modifiers::ALT),
-                "shift" => modifiers = Some(modifiers.unwrap_or(Modifiers::empty()) | Modifiers::SHIFT),
+                "cmd" | "command" => {
+                    modifiers = Some(modifiers.unwrap_or(Modifiers::empty()) | Modifiers::SUPER)
+                }
+                "ctrl" | "control" => {
+                    modifiers = Some(modifiers.unwrap_or(Modifiers::empty()) | Modifiers::CONTROL)
+                }
+                "alt" | "option" => {
+                    modifiers = Some(modifiers.unwrap_or(Modifiers::empty()) | Modifiers::ALT)
+                }
+                "shift" => {
+                    modifiers = Some(modifiers.unwrap_or(Modifiers::empty()) | Modifiers::SHIFT)
+                }
                 "space" => key = Some(Code::Space),
                 "a" => key = Some(Code::KeyA),
                 "b" => key = Some(Code::KeyB),
@@ -92,23 +100,25 @@ impl ShortcutManager {
         let shortcut = Shortcut::new(Some(Modifiers::ALT), Code::KeyR);
 
         let app_handle = app.clone();
-        app.global_shortcut().on_shortcut(shortcut, move |_app, _shortcut, event| {
-            // 只在按键按下时触发
-            use tauri_plugin_global_shortcut::ShortcutState;
-            if event.state != ShortcutState::Pressed {
-                return;
-            }
-
-            // 切换主窗口
-            if let Some(win) = app_handle.get_webview_window("main") {
-                if win.is_visible().unwrap_or(false) {
-                    let _ = win.hide();
-                } else {
-                    let _ = win.show();
-                    let _ = win.set_focus();
+        app.global_shortcut()
+            .on_shortcut(shortcut, move |_app, _shortcut, event| {
+                // 只在按键按下时触发
+                use tauri_plugin_global_shortcut::ShortcutState;
+                if event.state != ShortcutState::Pressed {
+                    return;
                 }
-            }
-        }).map_err(|e| VoloError::Other(e.to_string()))?;
+
+                // 切换主窗口
+                if let Some(win) = app_handle.get_webview_window("main") {
+                    if win.is_visible().unwrap_or(false) {
+                        let _ = win.hide();
+                    } else {
+                        let _ = win.show();
+                        let _ = win.set_focus();
+                    }
+                }
+            })
+            .map_err(|e| VoloError::Other(e.to_string()))?;
 
         Ok(())
     }
@@ -133,7 +143,9 @@ pub fn register_shortcut(
     let new_shortcut = Shortcut::new(modifiers, code);
 
     // 获取当前快捷键
-    let current = manager.current_shortcut.lock()
+    let current = manager
+        .current_shortcut
+        .lock()
         .map_err(|_| VoloError::Other("Failed to lock shortcut manager".to_string()))?
         .clone();
 
@@ -145,23 +157,25 @@ pub fn register_shortcut(
 
     // 注册新快捷键
     let app_handle = app.clone();
-    app.global_shortcut().on_shortcut(new_shortcut, move |_app, _shortcut, event| {
-        // 只在按键按下时触发
-        use tauri_plugin_global_shortcut::ShortcutState;
-        if event.state != ShortcutState::Pressed {
-            return;
-        }
-
-        // 切换主窗口
-        if let Some(win) = app_handle.get_webview_window("main") {
-            if win.is_visible().unwrap_or(false) {
-                let _ = win.hide();
-            } else {
-                let _ = win.show();
-                let _ = win.set_focus();
+    app.global_shortcut()
+        .on_shortcut(new_shortcut, move |_app, _shortcut, event| {
+            // 只在按键按下时触发
+            use tauri_plugin_global_shortcut::ShortcutState;
+            if event.state != ShortcutState::Pressed {
+                return;
             }
-        }
-    }).map_err(|e| VoloError::Other(e.to_string()))?;
+
+            // 切换主窗口
+            if let Some(win) = app_handle.get_webview_window("main") {
+                if win.is_visible().unwrap_or(false) {
+                    let _ = win.hide();
+                } else {
+                    let _ = win.show();
+                    let _ = win.set_focus();
+                }
+            }
+        })
+        .map_err(|e| VoloError::Other(e.to_string()))?;
 
     // 更新当前快捷键
     if let Ok(mut current) = manager.current_shortcut.lock() {
@@ -176,7 +190,8 @@ pub fn unregister_shortcut(app: AppHandle, shortcut: String) -> Result<()> {
     let (modifiers, code) = ShortcutManager::parse_shortcut(&shortcut)?;
     let shortcut = Shortcut::new(modifiers, code);
 
-    app.global_shortcut().unregister(shortcut)
+    app.global_shortcut()
+        .unregister(shortcut)
         .map_err(|e| VoloError::Other(e.to_string()))?;
 
     Ok(())

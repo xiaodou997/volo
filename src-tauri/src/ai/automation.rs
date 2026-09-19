@@ -5,16 +5,14 @@
 //! 核心时间计算保持纯函数；definition/runtime state 的持久化与后台 scheduler 分模块实现。
 
 pub(crate) mod commands;
-pub(crate) mod preflight;
-pub(crate) mod scheduler;
 #[cfg(test)]
 mod m1_smoke;
+pub(crate) mod preflight;
+pub(crate) mod scheduler;
 mod storage;
 pub use storage::{AutomationRecord, AutomationRetryState};
 
-use chrono::{
-    DateTime, Duration, Local, LocalResult, NaiveDate, NaiveDateTime, TimeZone, Utc,
-};
+use chrono::{DateTime, Duration, Local, LocalResult, NaiveDate, NaiveDateTime, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Result, VoloError};
@@ -113,7 +111,9 @@ pub fn validate_automation(automation: &WorkflowAutomation) -> Result<()> {
         )));
     }
     if automation.workflow_id.trim().is_empty() {
-        return Err(VoloError::Other("automation workflowId 不能为空".to_string()));
+        return Err(VoloError::Other(
+            "automation workflowId 不能为空".to_string(),
+        ));
     }
 
     automation.trigger.validate()?;
@@ -208,10 +208,7 @@ fn next_daily_run_in_timezone<Tz: TimeZone>(
 }
 
 /// 新建/启用 Automation 时，从当前时刻计算第一次运行时间。
-pub fn initial_next_run(
-    trigger: &AutomationTrigger,
-    from: DateTime<Utc>,
-) -> Result<DateTime<Utc>> {
+pub fn initial_next_run(trigger: &AutomationTrigger, from: DateTime<Utc>) -> Result<DateTime<Utc>> {
     trigger.validate()?;
     match trigger {
         AutomationTrigger::Interval { every_minutes } => {
@@ -456,14 +453,8 @@ mod tests {
         let scheduled_date = scheduled.with_timezone(&timezone).date_naive();
         let earliest_date = scheduled_date.succ_opt().unwrap();
 
-        let next = next_daily_run_in_timezone(
-            &timezone,
-            9,
-            30,
-            scheduled,
-            Some(earliest_date),
-        )
-        .unwrap();
+        let next =
+            next_daily_run_in_timezone(&timezone, 9, 30, scheduled, Some(earliest_date)).unwrap();
 
         assert_eq!(
             next,

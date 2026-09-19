@@ -64,7 +64,12 @@ impl PluginToolState {
     }
 
     /// 生成 request_id 并挂起等待通道（与发事件解耦，便于测试）
-    pub fn begin_call(&self) -> (String, oneshot::Receiver<std::result::Result<Value, String>>) {
+    pub fn begin_call(
+        &self,
+    ) -> (
+        String,
+        oneshot::Receiver<std::result::Result<Value, String>>,
+    ) {
         let request_id = uuid::Uuid::new_v4().to_string();
         let (tx, rx) = oneshot::channel();
         if let Ok(mut pending) = self.pending.lock() {
@@ -272,10 +277,7 @@ impl AgentToolExecutor<'_> {
         // 发不出去（如无窗口）直接视为失败
         if let Err(e) = self.app.emit("plugin-tool-call", &payload) {
             self.tool_state.cancel_call(&request_id);
-            return Err(VoloError::Other(format!(
-                "插件工具调用事件发送失败: {}",
-                e
-            )));
+            return Err(VoloError::Other(format!("插件工具调用事件发送失败: {}", e)));
         }
 
         match tokio::time::timeout(PLUGIN_TOOL_TIMEOUT, rx).await {
@@ -378,16 +380,10 @@ mod tests {
     fn test_sanitize_collisions_are_disambiguated_by_hash() {
         // 可读段相同，但原始 id 不同，最终 hash 必须不同。
         assert_eq!(sanitize("a.b"), sanitize("a_b"));
-        assert_ne!(
-            to_llm_name("a.b", "tool"),
-            to_llm_name("a_b", "tool")
-        );
+        assert_ne!(to_llm_name("a.b", "tool"), to_llm_name("a_b", "tool"));
 
         assert_eq!(sanitize("a.b"), sanitize("a b"));
-        assert_ne!(
-            to_llm_name("plugin", "a.b"),
-            to_llm_name("plugin", "a b")
-        );
+        assert_ne!(to_llm_name("plugin", "a.b"), to_llm_name("plugin", "a b"));
     }
 
     #[test]
@@ -433,14 +429,8 @@ mod tests {
     #[test]
     fn test_lookup_tool_uses_full_hashed_name() {
         let state = make_plugin_state(vec![
-            make_plugin(
-                "my.plugin",
-                vec![make_tool("gen-uuid", "生成 UUID", None)],
-            ),
-            make_plugin(
-                "my_plugin",
-                vec![make_tool("gen-uuid", "另一工具", None)],
-            ),
+            make_plugin("my.plugin", vec![make_tool("gen-uuid", "生成 UUID", None)]),
+            make_plugin("my_plugin", vec![make_tool("gen-uuid", "另一工具", None)]),
         ]);
 
         let dotted = to_llm_name("my.plugin", "gen-uuid");

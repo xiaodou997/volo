@@ -157,7 +157,10 @@ where
 
     async fn call_tool_inner(&self, name: &str, arguments: Value) -> Result<Value> {
         let result = self
-            .request("tools/call", json!({ "name": name, "arguments": arguments }))
+            .request(
+                "tools/call",
+                json!({ "name": name, "arguments": arguments }),
+            )
             .await?;
         extract_tool_text(&result, name)
     }

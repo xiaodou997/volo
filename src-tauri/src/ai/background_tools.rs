@@ -63,14 +63,8 @@ impl ToolExecutor for BackgroundToolExecutor<'_> {
                     self.mcp.call(name, args).await
                 }
                 BackgroundToolRoute::PluginHeadless => {
-                    plugin_headless::execute_plugin_tool(
-                        self.app,
-                        self.principal,
-                        name,
-                        args,
-                    )
-                    .await
-                },
+                    plugin_headless::execute_plugin_tool(self.app, self.principal, name, args).await
+                }
                 BackgroundToolRoute::Builtin => {
                     ToolRegistry::execute_as_background(
                         self.app,

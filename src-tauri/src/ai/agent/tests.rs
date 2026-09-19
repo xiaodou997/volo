@@ -526,7 +526,10 @@ async fn test_loop_logs_full_model_response() {
     }
 
     assert_eq!(log_entries[0].0, "model_response");
-    assert_eq!(log_entries[0].1["content"].as_str(), Some(long_answer.as_str()));
+    assert_eq!(
+        log_entries[0].1["content"].as_str(),
+        Some(long_answer.as_str())
+    );
 }
 
 #[test]
@@ -547,7 +550,9 @@ fn test_begin_turn_busy_guard() {
 
     manager.finish_turn(messages);
     assert!(!manager.is_busy());
-    let messages = manager.begin_turn("追问", SYSTEM_PROMPT, Vec::new()).unwrap();
+    let messages = manager
+        .begin_turn("追问", SYSTEM_PROMPT, Vec::new())
+        .unwrap();
     assert_eq!(messages.len(), 3);
     assert_eq!(messages[2].content.as_deref(), Some("追问"));
 }
@@ -555,13 +560,17 @@ fn test_begin_turn_busy_guard() {
 #[test]
 fn test_new_session_clears_history() {
     let manager = AgentManager::new();
-    let messages = manager.begin_turn("旧会话", SYSTEM_PROMPT, Vec::new()).unwrap();
+    let messages = manager
+        .begin_turn("旧会话", SYSTEM_PROMPT, Vec::new())
+        .unwrap();
     manager.finish_turn(messages);
     manager.cancel_flag().store(true, Ordering::Relaxed);
 
     manager.new_session();
     assert!(!manager.cancel_flag().load(Ordering::Relaxed));
-    let messages = manager.begin_turn("新会话", SYSTEM_PROMPT, Vec::new()).unwrap();
+    let messages = manager
+        .begin_turn("新会话", SYSTEM_PROMPT, Vec::new())
+        .unwrap();
     assert_eq!(messages.len(), 2);
     assert_eq!(messages[0].role, "system");
     manager.finish_turn(messages);
@@ -608,7 +617,9 @@ fn test_append_explicit_skill() {
 fn test_load_history_busy_guard_and_continue() {
     let manager = AgentManager::new();
 
-    let inflight = manager.begin_turn("进行中", SYSTEM_PROMPT, Vec::new()).unwrap();
+    let inflight = manager
+        .begin_turn("进行中", SYSTEM_PROMPT, Vec::new())
+        .unwrap();
     let restored = vec![
         Message::system(SYSTEM_PROMPT),
         Message::user("旧问题"),
@@ -621,7 +632,9 @@ fn test_load_history_busy_guard_and_continue() {
     manager.load_history(restored).unwrap();
     assert!(!manager.cancel_flag().load(Ordering::Relaxed));
 
-    let messages = manager.begin_turn("追问", SYSTEM_PROMPT, Vec::new()).unwrap();
+    let messages = manager
+        .begin_turn("追问", SYSTEM_PROMPT, Vec::new())
+        .unwrap();
     assert_eq!(messages.len(), 4);
     assert_eq!(messages[0].role, "system");
     assert_eq!(messages[2].content.as_deref(), Some("旧回答"));

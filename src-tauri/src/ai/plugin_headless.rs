@@ -19,6 +19,7 @@ use rquickjs::{Context, Function, Promise, Runtime};
 use serde_json::{json, Value};
 use tauri::{AppHandle, Manager};
 use tauri_plugin_clipboard_manager::ClipboardExt;
+#[cfg(not(target_os = "macos"))]
 use tauri_plugin_notification::NotificationExt;
 
 use crate::api::database::Database;
@@ -227,7 +228,6 @@ const HEADLESS_SHIM: &str = r#"
 })();
 "#;
 
-
 pub(crate) trait HeadlessHost: Send + Sync {
     fn call_envelope(&self, method: String, args_json: String) -> String;
 }
@@ -286,14 +286,12 @@ impl HeadlessPluginHost {
     }
 
     fn string_arg<'a>(args: &'a Value, name: &str, method: &str) -> Result<&'a str> {
-        args.get(name)
-            .and_then(Value::as_str)
-            .ok_or_else(|| {
-                VoloError::Other(format!(
-                    "headless host method '{}' requires string argument '{}'",
-                    method, name
-                ))
-            })
+        args.get(name).and_then(Value::as_str).ok_or_else(|| {
+            VoloError::Other(format!(
+                "headless host method '{}' requires string argument '{}'",
+                method, name
+            ))
+        })
     }
 
     fn call(&self, method: &str, args: Value) -> Result<Value> {
@@ -391,10 +389,9 @@ impl HeadlessPluginHost {
             "clipboard.writeText" => {
                 self.authorize("clipboard.write")?;
                 let text = Self::string_arg(&args, "text", method)?;
-                self.app
-                    .clipboard()
-                    .write_text(text)
-                    .map_err(|error| VoloError::Other(format!("Clipboard write failed: {}", error)))?;
+                self.app.clipboard().write_text(text).map_err(|error| {
+                    VoloError::Other(format!("Clipboard write failed: {}", error))
+                })?;
                 Ok(Value::Null)
             }
             "notification.show" => {
@@ -407,26 +404,18 @@ impl HeadlessPluginHost {
                             "headless host notification.show requires options object".to_string(),
                         )
                     })?;
-                let body = options
-                    .get("body")
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| {
-                        VoloError::Other(
-                            "headless host notification.show requires options.body".to_string(),
-                        )
-                    })?;
+                let body = options.get("body").and_then(Value::as_str).ok_or_else(|| {
+                    VoloError::Other(
+                        "headless host notification.show requires options.body".to_string(),
+                    )
+                })?;
                 let title = options
                     .get("title")
                     .and_then(Value::as_str)
                     .unwrap_or("Volo");
 
-                self.app
-                    .notification()
-                    .builder()
-                    .title(title)
-                    .body(body)
-                    .show()
-                    .map_err(|error| VoloError::Other(format!("Notification failed: {}", error)))?;
+                // macOS 走 UNUserNotificationCenter 原生桥（旧 NSUserNotification 已移除）。
+                crate::api::notification::show_system_notification(&self.app, title, body)?;
                 Ok(Value::Null)
             }
             "db.put" => {
@@ -434,7 +423,11 @@ impl HeadlessPluginHost {
                 let id = Self::string_arg(&args, "id", method)?.to_string();
                 let data = args.get("data").cloned().unwrap_or(Value::Null);
                 let db = self.app.state::<Database>();
-                Ok(serde_json::to_value(db.put_for(&self.plugin_id, id, data)?)?)
+                Ok(serde_json::to_value(db.put_for(
+                    &self.plugin_id,
+                    id,
+                    data,
+                )?)?)
             }
             "db.get" => {
                 self.authorize("db.read")?;
@@ -471,10 +464,12 @@ impl HeadlessPluginHost {
                 "ok": true,
                 "data": data
             }))
-            .unwrap_or_else(|error| format!(
-                "{{\"ok\":false,\"error\":\"serialize host response failed: {}\"}}",
-                error
-            )),
+            .unwrap_or_else(|error| {
+                format!(
+                    "{{\"ok\":false,\"error\":\"serialize host response failed: {}\"}}",
+                    error
+                )
+            }),
             Err(error) => serde_json::to_string(&json!({
                 "ok": false,
                 "error": error.to_string()
@@ -510,8 +505,8 @@ fn execute_source_sync(
     let deadline = Instant::now() + timeout;
     runtime.set_interrupt_handler(Some(Box::new(move || Instant::now() >= deadline)));
 
-    let context =
-        Context::full(&runtime).map_err(|error| js_error("create headless QuickJS context", error))?;
+    let context = Context::full(&runtime)
+        .map_err(|error| js_error("create headless QuickJS context", error))?;
     let input_json = serde_json::to_string(&args)?;
 
     let envelope_json = context
@@ -520,22 +515,24 @@ fn execute_source_sync(
                 .with_name("randomUUID")?;
             ctx.globals().set("__voloRandomUuid", uuid_fn)?;
 
-            let host_fn = Function::new(ctx.clone(), move |method: String, args_json: String| {
-                match &host {
-                    Some(host) => host.call_envelope(method, args_json),
-                    None => serde_json::to_string(&json!({
-                        "ok": false,
-                        "error": format!(
-                            "headless plugin host API is unavailable in pure runtime: {}",
-                            method
-                        )
-                    }))
-                    .unwrap_or_else(|_| {
-                        "{\"ok\":false,\"error\":\"headless host API unavailable\"}".to_string()
-                    }),
-                }
-            })?
-            .with_name("hostCall")?;
+            let host_fn =
+                Function::new(
+                    ctx.clone(),
+                    move |method: String, args_json: String| match &host {
+                        Some(host) => host.call_envelope(method, args_json),
+                        None => serde_json::to_string(&json!({
+                            "ok": false,
+                            "error": format!(
+                                "headless plugin host API is unavailable in pure runtime: {}",
+                                method
+                            )
+                        }))
+                        .unwrap_or_else(|_| {
+                            "{\"ok\":false,\"error\":\"headless host API unavailable\"}".to_string()
+                        }),
+                    },
+                )?
+                .with_name("hostCall")?;
             ctx.globals().set("__voloHostCall", host_fn)?;
 
             ctx.eval::<(), _>(HEADLESS_SHIM)?;
@@ -652,9 +649,7 @@ mod tests {
             });
         "#;
 
-        let result = execute_source(source, json!({ "value": 8 }))
-            .await
-            .unwrap();
+        let result = execute_source(source, json!({ "value": 8 })).await.unwrap();
         assert_eq!(result, json!({ "value": 9 }));
     }
 
@@ -697,9 +692,9 @@ mod tests {
         "#;
 
         let error = execute_source(source, json!({})).await.unwrap_err();
-        assert!(error
-            .to_string()
-            .contains("headless plugin host API is unavailable in pure runtime: clipboard.readText"));
+        assert!(error.to_string().contains(
+            "headless plugin host API is unavailable in pure runtime: clipboard.readText"
+        ));
     }
 
     #[test]
@@ -729,7 +724,11 @@ mod tests {
             true
         );
         assert_eq!(
-            PermissionEngine::declared(&["notification.show".to_string()], "notification.show", None),
+            PermissionEngine::declared(
+                &["notification.show".to_string()],
+                "notification.show",
+                None
+            ),
             true
         );
         assert_eq!(

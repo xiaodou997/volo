@@ -72,43 +72,29 @@ mod tests {
             uuid::Uuid::new_v4()
         ));
         std::fs::create_dir_all(&dir).unwrap();
-        (
-            dir.join("permissions.json"),
-            dir.join("audit.db"),
-            dir,
-        )
+        (dir.join("permissions.json"), dir.join("audit.db"), dir)
     }
 
     fn engine_with_grants(name: &str, grants: &[Grant]) -> (PermissionEngine, PathBuf) {
         let (store_path, audit_path, dir) = test_paths(name);
         store::save_grants(&store_path, grants).unwrap();
-        let engine = PermissionEngine::new(store_path, audit_path, Duration::from_millis(20)).unwrap();
+        let engine =
+            PermissionEngine::new(store_path, audit_path, Duration::from_millis(20)).unwrap();
         (engine, dir)
     }
 
     #[test]
     fn low_risk_background_permission_does_not_require_a_grant() {
         let (engine, dir) = engine_with_grants("low", &[]);
-        assert!(enforce_background(
-            &engine,
-            "workflow:notify",
-            "notification.show",
-            None,
-        )
-        .is_ok());
+        assert!(enforce_background(&engine, "workflow:notify", "notification.show", None,).is_ok());
         let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
     fn medium_risk_background_permission_requires_always() {
         let (engine, dir) = engine_with_grants("medium-deny", &[]);
-        let error = enforce_background(
-            &engine,
-            "workflow:clip",
-            "clipboard.read",
-            None,
-        )
-        .unwrap_err();
+        let error =
+            enforce_background(&engine, "workflow:clip", "clipboard.read", None).unwrap_err();
         assert!(error.to_string().contains("requires an Always grant"));
         let _ = std::fs::remove_dir_all(dir);
     }
@@ -122,13 +108,7 @@ mod tests {
             scope: Scope::Session,
         }];
         let (engine, dir) = engine_with_grants("session-deny", &grants);
-        assert!(enforce_background(
-            &engine,
-            "workflow:clip",
-            "clipboard.read",
-            None,
-        )
-        .is_err());
+        assert!(enforce_background(&engine, "workflow:clip", "clipboard.read", None,).is_err());
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -169,20 +149,8 @@ mod tests {
         }];
         let (engine, dir) = engine_with_grants("principal", &grants);
 
-        assert!(enforce_background(
-            &engine,
-            "workflow:a",
-            "clipboard.read",
-            None,
-        )
-        .is_ok());
-        assert!(enforce_background(
-            &engine,
-            "workflow:b",
-            "clipboard.read",
-            None,
-        )
-        .is_err());
+        assert!(enforce_background(&engine, "workflow:a", "clipboard.read", None,).is_ok());
+        assert!(enforce_background(&engine, "workflow:b", "clipboard.read", None,).is_err());
         let _ = std::fs::remove_dir_all(dir);
     }
 }
