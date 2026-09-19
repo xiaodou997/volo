@@ -263,12 +263,9 @@ impl ToolRegistry {
                     .get("title")
                     .and_then(Value::as_str)
                     .unwrap_or("Volo");
-                app.notification()
-                    .builder()
-                    .title(title)
-                    .body(body)
-                    .show()
-                    .map_err(|e| VoloError::Other(format!("Notification failed: {}", e)))?;
+                // macOS 走 UNUserNotificationCenter 原生桥（旧 NSUserNotification
+                // 已移除）；失败会携带真实原因返回，而不是插件路径的静默 Ok。
+                crate::api::notification::show_system_notification(app, title, body)?;
                 Ok(Value::String("通知已发送".to_string()))
             }
             "fs_write" => {

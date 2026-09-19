@@ -420,13 +420,8 @@ impl HeadlessPluginHost {
                     .and_then(Value::as_str)
                     .unwrap_or("Volo");
 
-                self.app
-                    .notification()
-                    .builder()
-                    .title(title)
-                    .body(body)
-                    .show()
-                    .map_err(|error| VoloError::Other(format!("Notification failed: {}", error)))?;
+                // macOS 走 UNUserNotificationCenter 原生桥（旧 NSUserNotification 已移除）。
+                crate::api::notification::show_system_notification(&self.app, title, body)?;
                 Ok(Value::Null)
             }
             "db.put" => {

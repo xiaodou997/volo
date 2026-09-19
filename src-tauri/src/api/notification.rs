@@ -29,18 +29,47 @@ pub async fn notification_show(
 
     let title = options.title.unwrap_or_else(|| "Volo".to_string());
 
-    let mut builder = app.notification().builder()
-        .title(&title)
-        .body(&options.body);
-
-    if let Some(icon_path) = options.icon {
-        builder = builder.icon(&icon_path);
+    #[cfg(not(target_os = "macos"))]
+    {
+        let mut builder = app.notification().builder()
+            .title(&title)
+            .body(&options.body);
+        if let Some(icon_path) = options.icon {
+            builder = builder.icon(&icon_path);
+        }
+        builder.show()
+            .map_err(|e| crate::error::VoloError::Other(e.to_string()))?;
+        return Ok(());
     }
 
-    builder.show()
-        .map_err(|e| crate::error::VoloError::Other(e.to_string()))?;
+    #[cfg(target_os = "macos")]
+    {
+        // macOS 通知图标取应用图标，per-notification icon 由插件路径保留给其他平台。
+        let _ = options.icon;
+        show_system_notification(&app, &title, &options.body)
+    }
+}
 
-    Ok(())
+/// 跨平台发送系统通知的统一入口。
+///
+/// macOS 走 UNUserNotificationCenter 原生桥（`notification_macos`）：
+/// notify-rust 依赖的 NSUserNotification 已被 macOS 27 移除，插件路径只会
+/// 静默失败。其他平台继续走 tauri-plugin-notification。
+pub fn show_system_notification(app: &AppHandle, title: &str, body: &str) -> Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = app;
+        return crate::api::notification_macos::send(title, body);
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        app.notification()
+            .builder()
+            .title(title)
+            .body(body)
+            .show()
+            .map_err(|e| VoloError::Other(e.to_string()))
+    }
 }
 
 // ============ 通知权限引导（#49） ============
@@ -88,6 +117,27 @@ fn save_primed(path: &Path, primed: bool) -> Result<()> {
     Ok(())
 }
 
+/// 真实通知授权状态标签。
+///
+/// macOS 走 UNUserNotificationCenter 查询系统真实状态；其他平台使用插件上报状态
+/// （桌面端插件是 Granted stub，仅移动端有意义）。
+fn real_permission_state(app: &AppHandle) -> Result<String> {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = app;
+        return crate::api::notification_macos::authorization_status().map(str::to_string);
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let state = app
+            .notification()
+            .permission_state()
+            .map_err(|e| VoloError::Other(e.to_string()))?;
+        Ok(permission_state_label(&state).to_string())
+    }
+}
+
+#[cfg_attr(target_os = "macos", allow(dead_code))]
 fn permission_state_label(state: &tauri::plugin::PermissionState) -> &'static str {
     use tauri::plugin::PermissionState as S;
     match state {
@@ -117,17 +167,14 @@ fn notification_settings_url(_identifier: &str) -> Option<String> {
 }
 
 fn current_permission_status(app: &AppHandle) -> Result<NotificationPermissionStatus> {
-    let plugin_state = app
-        .notification()
-        .permission_state()
-        .map_err(|e| VoloError::Other(e.to_string()))?;
+    let plugin_state = real_permission_state(app)?;
     let state_path = notification_state_path(app)?;
     let _guard = NOTIFICATION_STATE_LOCK
         .lock()
         .map_err(|_| VoloError::Other("notification state lock poisoned".to_string()))?;
     let primed = load_primed(&state_path);
     Ok(NotificationPermissionStatus {
-        plugin_state: permission_state_label(&plugin_state).to_string(),
+        plugin_state,
         primed,
         settings_url: notification_settings_url(&app.config().identifier),
     })
@@ -141,18 +188,21 @@ pub async fn notification_permission_status(
     current_permission_status(&app)
 }
 
-/// 申请/验证通知权限：调用插件权限入口（移动端为真实系统弹窗），
-/// 并发送一条可观察的引导通知。桌面端插件权限 API 是 Granted stub，
-/// 发送引导通知才是让 macOS 注册 Volo 的实际动作。
+/// 申请/验证通知权限。
+///
+/// macOS：发送可观察的引导通知（内部会先向 UNUserNotificationCenter 申请授权，
+/// 被拒绝时返回明确错误）；移动端/其他平台：调用插件权限入口并发送引导通知。
+/// 发送引导通知是让系统注册 Volo 通知设置项的实际动作。
 #[tauri::command]
 pub async fn notification_request_permission(
     app: AppHandle,
 ) -> Result<NotificationPermissionStatus> {
-    let requested = app
-        .notification()
-        .request_permission()
-        .map_err(|e| VoloError::Other(e.to_string()))?;
-    let _ = permission_state_label(&requested);
+    #[cfg(not(target_os = "macos"))]
+    {
+        app.notification()
+            .request_permission()
+            .map_err(|e| VoloError::Other(e.to_string()))?;
+    }
 
     let (title, body) = if cfg!(target_os = "macos") {
         (
@@ -163,12 +213,7 @@ pub async fn notification_request_permission(
         ("Volo notification test", "This is a notification test from Volo.")
     };
 
-    app.notification()
-        .builder()
-        .title(title)
-        .body(body)
-        .show()
-        .map_err(|e| VoloError::Other(e.to_string()))?;
+    show_system_notification(&app, title, body)?;
 
     let state_path = notification_state_path(&app)?;
     let _guard = NOTIFICATION_STATE_LOCK
@@ -183,7 +228,8 @@ pub async fn notification_request_permission(
 #[tauri::command]
 pub async fn notification_open_settings(app: AppHandle) -> Result<()> {
     let url = notification_settings_url(&app.config().identifier)
-        .ok_or_else(|| VoloError::Other("当前平台不支持跳转到系统通知设置".to_string()))?;    app.opener()
+        .ok_or_else(|| VoloError::Other("当前平台不支持跳转到系统通知设置".to_string()))?;
+    app.opener()
         .open_url(&url, None::<String>)
         .map_err(|e| VoloError::Other(e.to_string()))?;
     Ok(())

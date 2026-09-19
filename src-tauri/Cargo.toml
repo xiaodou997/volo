@@ -48,6 +48,12 @@ rquickjs = "0.13"
 [target.'cfg(target_os = "macos")'.dependencies]
 objc = "0.2"
 plist = "1"
+# UNUserNotificationCenter 原生通知桥（NSUserNotification 已被 macOS 27 移除，
+# tauri-plugin-notification → notify-rust → mac-notification-sys 仍走旧 API）
+objc2 = "0.6"
+objc2-foundation = "0.3"
+objc2-user-notifications = "0.3"
+block2 = "0.6"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 winapi = { version = "0.3", features = ["winuser", "shellapi"] }
