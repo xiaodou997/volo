@@ -14,6 +14,46 @@ use super::super::{
 
 const MAX_LISTED_WORKFLOW_RUNS: usize = 100;
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowRunSource {
+    #[default]
+    Manual,
+    Automation,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkflowRunContext {
+    pub source: WorkflowRunSource,
+    pub automation_id: Option<String>,
+    pub scheduled_for: Option<DateTime<Utc>>,
+    pub retry_attempt: Option<u32>,
+}
+
+impl WorkflowRunContext {
+    pub fn manual() -> Self {
+        Self {
+            source: WorkflowRunSource::Manual,
+            automation_id: None,
+            scheduled_for: None,
+            retry_attempt: None,
+        }
+    }
+
+    pub fn automation(
+        automation_id: impl Into<String>,
+        scheduled_for: DateTime<Utc>,
+        retry_attempt: Option<u32>,
+    ) -> Self {
+        Self {
+            source: WorkflowRunSource::Automation,
+            automation_id: Some(automation_id.into()),
+            scheduled_for: Some(scheduled_for),
+            retry_attempt,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkflowRunStepRecord {
@@ -33,6 +73,14 @@ pub struct WorkflowRunRecord {
     pub id: String,
     pub workflow_id: String,
     pub workflow_name: String,
+    #[serde(default)]
+    pub source: WorkflowRunSource,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub automation_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scheduled_for: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_attempt: Option<u32>,
     pub started_at: String,
     pub finished_at: String,
     pub duration_ms: u64,
@@ -126,10 +174,35 @@ pub fn build_record(
     finished_at: DateTime<Utc>,
     duration_ms: u64,
 ) -> WorkflowRunRecord {
+    build_record_with_context(
+        workflow,
+        execution,
+        &WorkflowRunContext::manual(),
+        started_at,
+        finished_at,
+        duration_ms,
+    )
+}
+
+pub fn build_record_with_context(
+    workflow: &Workflow,
+    execution: &WorkflowExecution,
+    context: &WorkflowRunContext,
+    started_at: DateTime<Utc>,
+    finished_at: DateTime<Utc>,
+    duration_ms: u64,
+) -> WorkflowRunRecord {
     WorkflowRunRecord {
         id: run_id(started_at),
         workflow_id: workflow.id.clone(),
         workflow_name: workflow.name.clone(),
+        source: context.source,
+        automation_id: context.automation_id.clone(),
+        scheduled_for: context
+            .scheduled_for
+            .as_ref()
+            .map(|value| value.to_rfc3339_opts(SecondsFormat::Millis, true)),
+        retry_attempt: context.retry_attempt,
         started_at: started_at.to_rfc3339_opts(SecondsFormat::Millis, true),
         finished_at: finished_at.to_rfc3339_opts(SecondsFormat::Millis, true),
         duration_ms,
@@ -257,6 +330,10 @@ mod tests {
         assert!(encoded.get("output").is_none());
         assert!(encoded["steps"][0].get("output").is_none());
         assert_eq!(encoded["durationMs"], 12);
+        assert_eq!(record.source, WorkflowRunSource::Manual);
+        assert!(record.automation_id.is_none());
+        assert!(record.scheduled_for.is_none());
+        assert!(record.retry_attempt.is_none());
     }
 
     #[test]
@@ -306,6 +383,51 @@ mod tests {
         assert_eq!(record.steps[0].status, WorkflowStepStatus::Failed);
         assert_eq!(record.steps[0].error.as_deref(), Some("permission denied"));
         assert_eq!(record.error.as_deref(), Some("permission denied"));
+    }
+
+    #[test]
+    fn automation_provenance_is_persisted_without_execution_payloads() {
+        let workflow = workflow("daily", "Daily");
+        let started = Utc::now();
+        let scheduled_for = started - chrono::Duration::seconds(3);
+        let record = build_record_with_context(
+            &workflow,
+            &execution(WorkflowExecutionStatus::Completed),
+            &WorkflowRunContext::automation("daily-job", scheduled_for, Some(2)),
+            started,
+            started,
+            12,
+        );
+        let encoded = serde_json::to_value(&record).unwrap();
+
+        assert_eq!(encoded["source"], "automation");
+        assert_eq!(encoded["automationId"], "daily-job");
+        assert_eq!(encoded["retryAttempt"], 2);
+        assert_eq!(
+            encoded["scheduledFor"],
+            scheduled_for.to_rfc3339_opts(SecondsFormat::Millis, true)
+        );
+        assert!(encoded.get("output").is_none());
+        assert!(encoded["steps"][0].get("output").is_none());
+    }
+
+    #[test]
+    fn legacy_history_without_source_defaults_to_manual() {
+        let value = serde_json::json!({
+            "id": "legacy-run",
+            "workflowId": "legacy",
+            "workflowName": "Legacy",
+            "startedAt": "2026-09-18T00:00:00.000Z",
+            "finishedAt": "2026-09-18T00:00:01.000Z",
+            "durationMs": 1000,
+            "status": "completed",
+            "steps": []
+        });
+        let record: WorkflowRunRecord = serde_json::from_value(value).unwrap();
+        assert_eq!(record.source, WorkflowRunSource::Manual);
+        assert!(record.automation_id.is_none());
+        assert!(record.scheduled_for.is_none());
+        assert!(record.retry_attempt.is_none());
     }
 
     #[test]
