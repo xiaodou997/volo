@@ -178,10 +178,7 @@ pub fn validate_workflow(workflow: &Workflow) -> Result<()> {
             )));
         }
         if !ids.insert(id) {
-            return Err(VoloError::Other(format!(
-                "workflow step id 重复: {}",
-                id
-            )));
+            return Err(VoloError::Other(format!("workflow step id 重复: {}", id)));
         }
 
         match step {
@@ -407,9 +404,16 @@ mod tests {
             .unwrap()
             .contains("broken failed"));
         assert!(execution.output.is_none());
-        assert!(execution.error.as_deref().unwrap().contains("broken failed"));
+        assert!(execution
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("broken failed"));
 
         let seen = runner.seen.lock().unwrap();
-        assert_eq!(seen.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(), vec!["first", "broken"]);
+        assert_eq!(
+            seen.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(),
+            vec!["first", "broken"]
+        );
     }
 }

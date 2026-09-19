@@ -32,7 +32,10 @@ pub fn get_app_icon(app_path: &str) -> Result<Option<String>> {
         icon_filename.clone(),
         "AppIcon.icns".to_string(),
         "app.icns".to_string(),
-        format!("{}.icns", app_path.file_stem().unwrap_or_default().to_string_lossy()),
+        format!(
+            "{}.icns",
+            app_path.file_stem().unwrap_or_default().to_string_lossy()
+        ),
     ];
 
     for candidate in icon_candidates {
@@ -58,7 +61,8 @@ fn get_icon_filename(plist_path: &Path) -> Result<String> {
         .map_err(|e| VoloError::Other(format!("Failed to parse plist: {}", e)))?;
 
     // 获取 CFBundleIconFile
-    if let Some(plist::Value::String(icon_file)) = plist.as_dictionary()
+    if let Some(plist::Value::String(icon_file)) = plist
+        .as_dictionary()
         .and_then(|d| d.get("CFBundleIconFile"))
     {
         // 如果没有扩展名，添加 .icns
@@ -84,7 +88,7 @@ fn convert_icns_to_base64(icns_path: &Path) -> Result<Option<String>> {
         .arg("format")
         .arg("png")
         .arg("--resampleWidth")
-        .arg("64")  // 64x64 图标
+        .arg("64") // 64x64 图标
         .arg(icns_path)
         .arg("--out")
         .arg(&temp_png)
@@ -99,7 +103,8 @@ fn convert_icns_to_base64(icns_path: &Path) -> Result<Option<String>> {
 
             // 读取 PNG 文件
             let png_data = std::fs::read(&temp_png)?;
-            let base64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &png_data);
+            let base64 =
+                base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &png_data);
 
             // 删除临时文件
             let _ = std::fs::remove_file(&temp_png);

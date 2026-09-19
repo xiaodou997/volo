@@ -1,9 +1,9 @@
 use chrono::Utc;
 use tauri::{AppHandle, Manager};
 
+use crate::ai::tools::ToolRegistry;
 use crate::core::capability::{capability_meta, RiskLevel};
 use crate::core::permission::{enforce_background, PermissionEngine};
-use crate::ai::tools::ToolRegistry;
 use crate::error::{Result, VoloError};
 
 use super::{preflight, storage, AutomationRecord, WorkflowAutomation};
@@ -59,10 +59,7 @@ pub fn automation_list(app: AppHandle) -> Result<Vec<AutomationRecord>> {
 /// 保存 renderer 可编辑的 Automation definition。
 /// `nextRunAt` 由后端根据旧记录和当前时间计算，renderer 无法直接覆盖。
 #[tauri::command]
-pub fn automation_save(
-    app: AppHandle,
-    automation: WorkflowAutomation,
-) -> Result<AutomationRecord> {
+pub fn automation_save(app: AppHandle, automation: WorkflowAutomation) -> Result<AutomationRecord> {
     storage::save_automation(&storage::automations_dir(&app)?, automation, Utc::now())
 }
 
@@ -70,7 +67,6 @@ pub fn automation_save(
 pub fn automation_delete(app: AppHandle, automation_id: String) -> Result<()> {
     storage::delete_automation(&storage::automations_dir(&app)?, &automation_id)
 }
-
 
 /// 为已保存 Workflow 主动发起一次标准后台权限审批。
 ///
@@ -137,35 +133,29 @@ mod tests {
         let file = dir.join("input.txt");
         std::fs::write(&file, "hello").unwrap();
 
-        let normalized = normalize_background_resource(
-            "fs.read",
-            Some(file.to_string_lossy().into_owned()),
-        )
-        .unwrap()
-        .unwrap();
+        let normalized =
+            normalize_background_resource("fs.read", Some(file.to_string_lossy().into_owned()))
+                .unwrap()
+                .unwrap();
         assert_eq!(
             std::path::PathBuf::from(normalized),
             std::fs::canonicalize(&file).unwrap()
         );
 
-        let normalized_dir = normalize_background_resource(
-            "fs.read",
-            Some(dir.to_string_lossy().into_owned()),
-        )
-        .unwrap()
-        .unwrap();
+        let normalized_dir =
+            normalize_background_resource("fs.read", Some(dir.to_string_lossy().into_owned()))
+                .unwrap()
+                .unwrap();
         assert_eq!(
             std::path::PathBuf::from(normalized_dir),
             std::fs::canonicalize(&dir).unwrap()
         );
 
         let missing = dir.join("future.txt");
-        let normalized_missing = normalize_background_resource(
-            "fs.read",
-            Some(missing.to_string_lossy().into_owned()),
-        )
-        .unwrap()
-        .unwrap();
+        let normalized_missing =
+            normalize_background_resource("fs.read", Some(missing.to_string_lossy().into_owned()))
+                .unwrap()
+                .unwrap();
         assert_eq!(
             std::path::PathBuf::from(normalized_missing),
             std::fs::canonicalize(&dir).unwrap().join("future.txt")
@@ -186,12 +176,13 @@ mod tests {
     fn resource_bound_grants_normalize_like_runtime_execution() {
         let home = dirs::home_dir().unwrap();
         assert_eq!(
-            normalize_background_resource(
-                "fs.write",
-                Some("~/Documents/output.txt".to_string()),
+            normalize_background_resource("fs.write", Some("~/Documents/output.txt".to_string()),)
+                .unwrap(),
+            Some(
+                home.join("Documents/output.txt")
+                    .to_string_lossy()
+                    .into_owned()
             )
-            .unwrap(),
-            Some(home.join("Documents/output.txt").to_string_lossy().into_owned())
         );
 
         assert_eq!(
@@ -211,14 +202,12 @@ mod tests {
             normalize_background_resource(capability, None).unwrap(),
             Some("mcp__server__tool".to_string())
         );
-        assert!(normalize_background_resource(
-            capability,
-            Some("mcp__other__tool".to_string()),
-        )
-        .is_err());
+        assert!(
+            normalize_background_resource(capability, Some("mcp__other__tool".to_string()),)
+                .is_err()
+        );
     }
 }
-
 
 #[tauri::command]
 pub fn automation_permission_preflight(

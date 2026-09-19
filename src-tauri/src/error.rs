@@ -7,28 +7,28 @@ use thiserror::Error;
 pub enum VoloError {
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
-    
+
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
-    
+
     #[error("Tauri error: {0}")]
     Tauri(#[from] tauri::Error),
-    
+
     #[error("Database error: {0}")]
     Database(#[from] rusqlite::Error),
-    
+
     #[error("Plugin error: {0}")]
     Plugin(String),
-    
+
     #[error("Shortcut parse error: {0}")]
     ShortcutParse(String),
-    
+
     #[error("Not found: {0}")]
     NotFound(String),
-    
+
     #[error("Permission denied: {0}")]
     PermissionDenied(String),
-    
+
     #[error("{0}")]
     Other(String),
 }

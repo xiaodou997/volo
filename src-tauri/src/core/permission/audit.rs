@@ -1,9 +1,9 @@
 //! 审计日志
 //! Medium 及以上风险等级的权限决策写入 app_data_dir/audit.db
 
+use crate::error::Result;
 use rusqlite::{params, Connection};
 use std::path::Path;
-use crate::error::Result;
 
 pub struct AuditLog {
     conn: Connection,
@@ -63,8 +63,16 @@ mod tests {
         let path = dir.join("audit.db");
 
         let log = AuditLog::open(&path).unwrap();
-        log.record("plugin-a", "fs.write", Some("/tmp/x"), "allow", Some("session")).unwrap();
-        log.record("plugin-b", "clipboard.read", None, "deny", None).unwrap();
+        log.record(
+            "plugin-a",
+            "fs.write",
+            Some("/tmp/x"),
+            "allow",
+            Some("session"),
+        )
+        .unwrap();
+        log.record("plugin-b", "clipboard.read", None, "deny", None)
+            .unwrap();
 
         let count: i64 = log
             .conn

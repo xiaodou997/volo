@@ -9,8 +9,14 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum PluginSearchResult {
-    Feature { plugin: PluginInfo, feature: FeatureInfo },
-    Command { plugin: PluginInfo, command: CommandInfo },
+    Feature {
+        plugin: PluginInfo,
+        feature: FeatureInfo,
+    },
+    Command {
+        plugin: PluginInfo,
+        command: CommandInfo,
+    },
 }
 
 /// 简化的插件信息（用于搜索结果）
@@ -140,7 +146,11 @@ pub fn search_plugins(
 
     // 按评分降序（同分保持扫描顺序），取前 5
     scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
-    scored.into_iter().take(5).map(|(_, result)| result).collect()
+    scored
+        .into_iter()
+        .take(5)
+        .map(|(_, result)| result)
+        .collect()
 }
 
 #[cfg(test)]

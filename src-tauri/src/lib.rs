@@ -1,12 +1,12 @@
 //! Volo - 桌面效率工具箱
 
-pub mod error;
-pub mod core;
+pub mod ai;
 pub mod api;
+pub mod core;
+pub mod error;
+pub mod platform;
 pub mod plugin;
 pub mod search;
-pub mod platform;
-pub mod ai;
 
 use core::StartupManager;
 

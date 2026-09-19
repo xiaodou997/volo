@@ -142,9 +142,7 @@ fn analyze_builtin(
         );
     }
 
-    if builtin_resource_arg(name, args)
-        .is_some_and(contains_runtime_binding)
-    {
+    if builtin_resource_arg(name, args).is_some_and(contains_runtime_binding) {
         return requirement(
             step_id,
             name,
@@ -254,10 +252,7 @@ fn analyze_plugin(
             "plugin.runtime",
             None,
             PreflightStatus::Runtime,
-            Some(
-                "Plugin Tool 的具体宿主 API 调用只能在 Headless Runtime 执行时确认"
-                    .to_string(),
-            ),
+            Some("Plugin Tool 的具体宿主 API 调用只能在 Headless Runtime 执行时确认".to_string()),
         ));
     }
 
@@ -273,12 +268,7 @@ pub fn analyze(app: &AppHandle, workflow: &Workflow) -> Result<AutomationPermiss
     let mut requirements = Vec::new();
 
     for step in &workflow.steps {
-        let WorkflowStep::Tool {
-            id,
-            name,
-            args,
-        } = step
-        else {
+        let WorkflowStep::Tool { id, name, args } = step else {
             continue;
         };
 
@@ -330,12 +320,7 @@ pub fn analyze(app: &AppHandle, workflow: &Workflow) -> Result<AutomationPermiss
 mod tests {
     use super::*;
 
-    fn grant(
-        principal: &str,
-        capability: &str,
-        resource: Option<&str>,
-        scope: Scope,
-    ) -> GrantInfo {
+    fn grant(principal: &str, capability: &str, resource: Option<&str>, scope: Scope) -> GrantInfo {
         let meta = capability_meta(capability);
         GrantInfo {
             plugin_id: principal.to_string(),
@@ -381,23 +366,14 @@ mod tests {
 
     #[test]
     fn builtin_fs_read_preflight_distinguishes_missing_ready_and_runtime() {
-        let dir = std::env::temp_dir().join(format!(
-            "volo-preflight-fs-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let dir = std::env::temp_dir().join(format!("volo-preflight-fs-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join("input.txt");
         std::fs::write(&file, "hello").unwrap();
         let canonical = std::fs::canonicalize(&file).unwrap();
         let args = serde_json::json!({ "path": file.to_string_lossy() });
 
-        let missing = analyze_builtin(
-            "workflow:demo",
-            &[],
-            "read",
-            "fs_read",
-            &args,
-        );
+        let missing = analyze_builtin("workflow:demo", &[], "read", "fs_read", &args);
         assert_eq!(missing.status, PreflightStatus::Missing);
         assert_eq!(
             missing.resource.as_deref(),
@@ -410,13 +386,7 @@ mod tests {
             Some(canonical.to_string_lossy().as_ref()),
             Scope::Always,
         )];
-        let ready = analyze_builtin(
-            "workflow:demo",
-            &grants,
-            "read",
-            "fs_read",
-            &args,
-        );
+        let ready = analyze_builtin("workflow:demo", &grants, "read", "fs_read", &args);
         assert_eq!(ready.status, PreflightStatus::Ready);
 
         let runtime = analyze_builtin(

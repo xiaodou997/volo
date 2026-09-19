@@ -283,10 +283,7 @@ impl SseAccumulator {
 
         if let Some(calls) = delta.get("tool_calls").and_then(Value::as_array) {
             for call in calls {
-                let index = call
-                    .get("index")
-                    .and_then(Value::as_u64)
-                    .unwrap_or(0) as usize;
+                let index = call.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
                 while self.tool_calls.len() <= index {
                     self.tool_calls.push(PartialToolCall::default());
                 }
@@ -405,7 +402,9 @@ impl ChatBackend for OpenAiBackend {
                 .get("choices")
                 .and_then(|c| c.get(0))
                 .and_then(|c| c.get("message"))
-                .ok_or_else(|| VoloError::Other("LLM response missing choices[0].message".into()))?;
+                .ok_or_else(|| {
+                    VoloError::Other("LLM response missing choices[0].message".into())
+                })?;
 
             let content = message
                 .get("content")
@@ -488,7 +487,10 @@ mod tests {
         let wire = msg.to_wire();
         assert_eq!(wire["role"], "user");
         let parts = wire["content"].as_array().expect("应为 parts 数组");
-        assert_eq!(parts[0], json!({ "type": "text", "text": "这张图里有什么" }));
+        assert_eq!(
+            parts[0],
+            json!({ "type": "text", "text": "这张图里有什么" })
+        );
         assert_eq!(
             parts[1],
             json!({ "type": "image_url", "image_url": { "url": "data:image/png;base64,AAAA" } })
@@ -542,8 +544,11 @@ mod tests {
         let backend = OpenAiBackend::new(String::new(), "gpt-4o".to_string(), "k".to_string());
         assert_eq!(backend.base_url, DEFAULT_BASE_URL);
 
-        let backend =
-            OpenAiBackend::new("https://api.deepseek.com/v1/".to_string(), "m".into(), "k".into());
+        let backend = OpenAiBackend::new(
+            "https://api.deepseek.com/v1/".to_string(),
+            "m".into(),
+            "k".into(),
+        );
         assert_eq!(backend.base_url, "https://api.deepseek.com/v1");
     }
 

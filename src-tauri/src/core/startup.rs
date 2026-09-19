@@ -1,9 +1,9 @@
 //! 启动优化模块
 //! 管理应用启动流程，优化启动性能
 
-use std::time::{Instant, Duration};
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager};
-use tracing::{info, debug};
+use tracing::{debug, info};
 
 /// 启动阶段计时器
 pub struct StartupTimer {
@@ -75,8 +75,8 @@ impl StartupManager {
 
     /// 初始化关键模块（同步阻塞）
     async fn init_critical(app: &AppHandle) -> Result<(), crate::error::VoloError> {
-        use crate::core::Config;
         use crate::api::database::Database;
+        use crate::core::Config;
 
         // 配置（必须最先加载）
         let config = Config::init(app)?;
@@ -105,10 +105,10 @@ impl StartupManager {
 
     /// 并行初始化独立模块
     async fn init_parallel(app: &AppHandle) -> Result<(), crate::error::VoloError> {
-        use crate::search::app_cache::AppCache;
-        use crate::search::history::SearchHistoryManager;
-        use crate::search::file_index::FileIndex;
         use crate::plugin::manager::PluginState;
+        use crate::search::app_cache::AppCache;
+        use crate::search::file_index::FileIndex;
+        use crate::search::history::SearchHistoryManager;
 
         // 并行初始化这些独立的模块
         let app_handle1 = app.clone();
@@ -135,9 +135,7 @@ impl StartupManager {
             Ok::<_, crate::error::VoloError>(file_index)
         });
 
-        let plugin_task = tokio::task::spawn_blocking(move || {
-            PluginState::new(&app_handle2)
-        });
+        let plugin_task = tokio::task::spawn_blocking(move || PluginState::new(&app_handle2));
 
         let app_handle4 = app.clone();
         let skill_task = tokio::task::spawn_blocking(move || {
@@ -146,14 +144,14 @@ impl StartupManager {
         });
 
         // 等待所有任务完成
-        let cache = cache_task.await.map_err(|e| {
-            crate::error::VoloError::Other(format!("Cache init failed: {}", e))
-        })??;
+        let cache = cache_task
+            .await
+            .map_err(|e| crate::error::VoloError::Other(format!("Cache init failed: {}", e)))??;
         app.manage(cache);
 
-        let history = history_task.await.map_err(|e| {
-            crate::error::VoloError::Other(format!("History init failed: {}", e))
-        })??;
+        let history = history_task
+            .await
+            .map_err(|e| crate::error::VoloError::Other(format!("History init failed: {}", e)))??;
         app.manage(history);
 
         let file_index = file_index_task.await.map_err(|e| {

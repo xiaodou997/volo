@@ -1,13 +1,13 @@
 //! 数据库 API
 
-use rusqlite::{Connection, params, OptionalExtension};
+use crate::core::permission::{require, PermissionEngine};
+use crate::error::{Result, VoloError};
+use crate::plugin::manager::PluginState;
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::Mutex;
 use tauri::{AppHandle, State};
-use crate::core::permission::{require, PermissionEngine};
-use crate::error::{Result, VoloError};
-use crate::plugin::manager::PluginState;
 
 /// 文档结构
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -47,7 +47,7 @@ impl Database {
         )?;
 
         Ok(Self {
-            conn: Mutex::new(conn)
+            conn: Mutex::new(conn),
         })
     }
 
@@ -60,7 +60,9 @@ impl Database {
         id: String,
         data: serde_json::Value,
     ) -> Result<Doc> {
-        let conn = self.conn.lock()
+        let conn = self
+            .conn
+            .lock()
             .map_err(|_| VoloError::Other("Database lock error".to_string()))?;
 
         let full_id = make_id(namespace, &id);
@@ -82,35 +84,39 @@ impl Database {
     }
 
     pub(crate) fn get_for(&self, namespace: &str, id: String) -> Result<Option<Doc>> {
-        let conn = self.conn.lock()
+        let conn = self
+            .conn
+            .lock()
             .map_err(|_| VoloError::Other("Database lock error".to_string()))?;
 
         let full_id = make_id(namespace, &id);
-        let mut stmt = conn.prepare(
-            "SELECT id, rev, data, updated_at FROM docs WHERE id = ?1"
-        )?;
+        let mut stmt = conn.prepare("SELECT id, rev, data, updated_at FROM docs WHERE id = ?1")?;
 
-        let result = stmt.query_row(params![full_id], |row| {
-            let full_id: String = row.get(0)?;
-            let original_id = full_id
-                .strip_prefix(&format!("{}:", namespace))
-                .unwrap_or(&full_id)
-                .to_string();
+        let result = stmt
+            .query_row(params![full_id], |row| {
+                let full_id: String = row.get(0)?;
+                let original_id = full_id
+                    .strip_prefix(&format!("{}:", namespace))
+                    .unwrap_or(&full_id)
+                    .to_string();
 
-            Ok(Doc {
-                _id: original_id,
-                _rev: row.get(1)?,
-                data: serde_json::from_str(&row.get::<_, String>(2)?)
-                    .unwrap_or(serde_json::Value::Null),
-                updated_at: row.get(3)?,
+                Ok(Doc {
+                    _id: original_id,
+                    _rev: row.get(1)?,
+                    data: serde_json::from_str(&row.get::<_, String>(2)?)
+                        .unwrap_or(serde_json::Value::Null),
+                    updated_at: row.get(3)?,
+                })
             })
-        }).optional()?;
+            .optional()?;
 
         Ok(result)
     }
 
     pub(crate) fn remove_for(&self, namespace: &str, id: String) -> Result<()> {
-        let conn = self.conn.lock()
+        let conn = self
+            .conn
+            .lock()
             .map_err(|_| VoloError::Other("Database lock error".to_string()))?;
 
         let full_id = make_id(namespace, &id);
@@ -119,7 +125,9 @@ impl Database {
     }
 
     pub(crate) fn all_for(&self, namespace: &str) -> Result<Vec<Doc>> {
-        let conn = self.conn.lock()
+        let conn = self
+            .conn
+            .lock()
             .map_err(|_| VoloError::Other("Database lock error".to_string()))?;
 
         let mut stmt = conn.prepare(
@@ -127,20 +135,24 @@ impl Database {
         )?;
 
         let prefix = format!("{}:", namespace);
-        let docs = stmt.query_map(params![namespace], |row| {
-            let full_id: String = row.get(0)?;
-            let original_id = full_id.strip_prefix(&prefix).unwrap_or(&full_id).to_string();
+        let docs = stmt
+            .query_map(params![namespace], |row| {
+                let full_id: String = row.get(0)?;
+                let original_id = full_id
+                    .strip_prefix(&prefix)
+                    .unwrap_or(&full_id)
+                    .to_string();
 
-            Ok(Doc {
-                _id: original_id,
-                _rev: row.get(1)?,
-                data: serde_json::from_str(&row.get::<_, String>(2)?)
-                    .unwrap_or(serde_json::Value::Null),
-                updated_at: row.get(3)?,
-            })
-        })?
-        .filter_map(|doc| doc.ok())
-        .collect();
+                Ok(Doc {
+                    _id: original_id,
+                    _rev: row.get(1)?,
+                    data: serde_json::from_str(&row.get::<_, String>(2)?)
+                        .unwrap_or(serde_json::Value::Null),
+                    updated_at: row.get(3)?,
+                })
+            })?
+            .filter_map(|doc| doc.ok())
+            .collect();
 
         Ok(docs)
     }
@@ -162,7 +174,15 @@ pub async fn db_put(
     id: String,
     data: serde_json::Value,
 ) -> Result<Doc> {
-    require(&app, &engine, &plugins, plugin_id.as_deref(), "db.write", None).await?;
+    require(
+        &app,
+        &engine,
+        &plugins,
+        plugin_id.as_deref(),
+        "db.write",
+        None,
+    )
+    .await?;
 
     // 分库 key 以验证后的身份为准；主窗口自用归入 "system"
     let namespace = plugin_id.as_deref().unwrap_or("system");
@@ -179,7 +199,15 @@ pub async fn db_get(
     plugin_id: Option<String>,
     id: String,
 ) -> Result<Option<Doc>> {
-    require(&app, &engine, &plugins, plugin_id.as_deref(), "db.read", None).await?;
+    require(
+        &app,
+        &engine,
+        &plugins,
+        plugin_id.as_deref(),
+        "db.read",
+        None,
+    )
+    .await?;
 
     let namespace = plugin_id.as_deref().unwrap_or("system");
     db.get_for(namespace, id)
@@ -195,7 +223,15 @@ pub async fn db_remove(
     plugin_id: Option<String>,
     id: String,
 ) -> Result<()> {
-    require(&app, &engine, &plugins, plugin_id.as_deref(), "db.write", None).await?;
+    require(
+        &app,
+        &engine,
+        &plugins,
+        plugin_id.as_deref(),
+        "db.write",
+        None,
+    )
+    .await?;
 
     let namespace = plugin_id.as_deref().unwrap_or("system");
     db.remove_for(namespace, id)
@@ -210,7 +246,15 @@ pub async fn db_all(
     db: State<'_, Database>,
     plugin_id: Option<String>,
 ) -> Result<Vec<Doc>> {
-    require(&app, &engine, &plugins, plugin_id.as_deref(), "db.read", None).await?;
+    require(
+        &app,
+        &engine,
+        &plugins,
+        plugin_id.as_deref(),
+        "db.read",
+        None,
+    )
+    .await?;
 
     let namespace = plugin_id.as_deref().unwrap_or("system");
     db.all_for(namespace)
@@ -221,10 +265,8 @@ mod tests {
     use super::*;
 
     fn test_db() -> (Database, std::path::PathBuf) {
-        let path = std::env::temp_dir().join(format!(
-            "volo-database-test-{}.db",
-            uuid::Uuid::new_v4()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("volo-database-test-{}.db", uuid::Uuid::new_v4()));
         (Database::new(&path).unwrap(), path)
     }
 
@@ -232,13 +274,27 @@ mod tests {
     fn namespaced_primitives_isolate_plugins_and_preserve_colons_in_ids() {
         let (db, path) = test_db();
 
-        db.put_for("plugin-a", "item:one".to_string(), serde_json::json!({"owner":"a"}))
-            .unwrap();
-        db.put_for("plugin-b", "item:one".to_string(), serde_json::json!({"owner":"b"}))
-            .unwrap();
+        db.put_for(
+            "plugin-a",
+            "item:one".to_string(),
+            serde_json::json!({"owner":"a"}),
+        )
+        .unwrap();
+        db.put_for(
+            "plugin-b",
+            "item:one".to_string(),
+            serde_json::json!({"owner":"b"}),
+        )
+        .unwrap();
 
-        let a = db.get_for("plugin-a", "item:one".to_string()).unwrap().unwrap();
-        let b = db.get_for("plugin-b", "item:one".to_string()).unwrap().unwrap();
+        let a = db
+            .get_for("plugin-a", "item:one".to_string())
+            .unwrap()
+            .unwrap();
+        let b = db
+            .get_for("plugin-b", "item:one".to_string())
+            .unwrap()
+            .unwrap();
         assert_eq!(a._id, "item:one");
         assert_eq!(b._id, "item:one");
         assert_eq!(a.data["owner"], "a");
@@ -246,8 +302,14 @@ mod tests {
 
         assert_eq!(db.all_for("plugin-a").unwrap().len(), 1);
         db.remove_for("plugin-a", "item:one".to_string()).unwrap();
-        assert!(db.get_for("plugin-a", "item:one".to_string()).unwrap().is_none());
-        assert!(db.get_for("plugin-b", "item:one".to_string()).unwrap().is_some());
+        assert!(db
+            .get_for("plugin-a", "item:one".to_string())
+            .unwrap()
+            .is_none());
+        assert!(db
+            .get_for("plugin-b", "item:one".to_string())
+            .unwrap()
+            .is_some());
 
         drop(db);
         let _ = std::fs::remove_file(path);

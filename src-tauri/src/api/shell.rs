@@ -1,10 +1,10 @@
 //! Shell API
 
-use tauri::{AppHandle, State};
-use tauri_plugin_opener::OpenerExt;
 use crate::core::permission::{require, PermissionEngine};
 use crate::error::Result;
 use crate::plugin::manager::PluginState;
+use tauri::{AppHandle, State};
+use tauri_plugin_opener::OpenerExt;
 
 #[tauri::command]
 pub async fn shell_open(
@@ -14,9 +14,18 @@ pub async fn shell_open(
     plugin_id: Option<String>,
     url: String,
 ) -> Result<()> {
-    require(&app, &engine, &plugins, plugin_id.as_deref(), "shell.open", Some(&url)).await?;
+    require(
+        &app,
+        &engine,
+        &plugins,
+        plugin_id.as_deref(),
+        "shell.open",
+        Some(&url),
+    )
+    .await?;
 
-    app.opener().open_url(&url, None::<String>)
+    app.opener()
+        .open_url(&url, None::<String>)
         .map_err(|e| crate::error::VoloError::Other(e.to_string()))?;
     Ok(())
 }
@@ -29,7 +38,15 @@ pub async fn shell_open_path(
     plugin_id: Option<String>,
     path: String,
 ) -> Result<()> {
-    require(&app, &engine, &plugins, plugin_id.as_deref(), "shell.open", Some(&path)).await?;
+    require(
+        &app,
+        &engine,
+        &plugins,
+        plugin_id.as_deref(),
+        "shell.open",
+        Some(&path),
+    )
+    .await?;
 
     // 使用系统默认程序打开文件/文件夹
     #[cfg(target_os = "macos")]

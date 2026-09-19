@@ -185,16 +185,17 @@ pub fn agent_ask(
     let skills_dir = super::skill::skills_dir(&app)?;
     let skills = super::skill::scan_skills(&skills_dir);
     let mut system_prompt = build_system_prompt(&skills);
-    if let Some(name) = skill.as_deref().map(str::trim).filter(|name| !name.is_empty()) {
+    if let Some(name) = skill
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+    {
         let body = super::skill::load_skill_body(&skills_dir, name)?;
         system_prompt = append_explicit_skill(system_prompt, name, &body);
     }
 
-    let mut messages = manager.begin_turn(
-        &query,
-        &system_prompt,
-        images.clone().unwrap_or_default(),
-    )?;
+    let mut messages =
+        manager.begin_turn(&query, &system_prompt, images.clone().unwrap_or_default())?;
     if let Some(log) = session_log.as_mut() {
         let image_count = images.as_ref().map(|items| items.len()).unwrap_or(0);
         let _ = log.log(

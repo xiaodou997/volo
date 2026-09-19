@@ -143,8 +143,7 @@ fn resource_matches(pattern: &str, resource: &str) -> bool {
             if pi + 1 < pattern.len() && pattern[pi + 1] == b'*' {
                 // 连续两个星号：跳过 `**`，或消费任意一个字符（包含 `/`）。
                 matches_from(pattern, resource, pi + 2, ri, memo)
-                    || (ri < resource.len()
-                        && matches_from(pattern, resource, pi, ri + 1, memo))
+                    || (ri < resource.len() && matches_from(pattern, resource, pi, ri + 1, memo))
             } else {
                 // 单星号：不跨目录分隔符。
                 matches_from(pattern, resource, pi + 1, ri, memo)
@@ -206,7 +205,11 @@ impl PermissionEngine {
     }
 
     /// 以显式路径构造（测试可用临时目录与短超时）
-    pub fn new(store_path: PathBuf, audit_path: PathBuf, approval_timeout: Duration) -> Result<Self> {
+    pub fn new(
+        store_path: PathBuf,
+        audit_path: PathBuf,
+        approval_timeout: Duration,
+    ) -> Result<Self> {
         let persisted = store::load_grants(&store_path)?;
         let grants: HashMap<GrantKey, Scope> = persisted
             .into_iter()
@@ -220,7 +223,10 @@ impl PermissionEngine {
 
         let audit = AuditLog::open(&audit_path)?;
 
-        info!("PermissionEngine initialized with {} persisted grants", grants.len());
+        info!(
+            "PermissionEngine initialized with {} persisted grants",
+            grants.len()
+        );
 
         Ok(Self {
             grants: Mutex::new(grants),
@@ -241,11 +247,7 @@ impl PermissionEngine {
     /// - `fs.*:/Users/**` 覆盖 fs 模块内、且资源命中该模式的 capability；
     /// - 动态 capability（如 `mcp.call:mcp__server__tool`）按完整字符串精确比较，
     ///   不把 capability 自身的冒号误当成 resource scope。
-    pub fn declared(
-        permissions: &[String],
-        capability: &str,
-        resource: Option<&str>,
-    ) -> bool {
+    pub fn declared(permissions: &[String], capability: &str, resource: Option<&str>) -> bool {
         let module = capability.split('.').next().unwrap_or(capability);
         let module_wildcard = format!("{}.*", module);
 
@@ -471,12 +473,7 @@ impl PermissionEngine {
     /// 撤销授权。
     /// 指定 resource 时只撤销该资源；resource=None 时撤销同 principal + capability 下的全部资源授权，
     /// 保持旧版设置页调用也能安全地“一次撤干净”。
-    pub fn revoke(
-        &self,
-        principal: &str,
-        capability: &str,
-        resource: Option<&str>,
-    ) -> Result<()> {
+    pub fn revoke(&self, principal: &str, capability: &str, resource: Option<&str>) -> Result<()> {
         let normalized_resource = resource.map(|value| value.replace('\\', "/"));
         let mut removed_always = false;
 
@@ -486,18 +483,21 @@ impl PermissionEngine {
                 .lock()
                 .map_err(|_| VoloError::Other("Permission lock error".to_string()))?;
 
-            grants.retain(|(grant_principal, grant_capability, grant_resource), scope| {
-                let matches_base = grant_principal == principal && grant_capability == capability;
-                let matches_resource = match normalized_resource.as_ref() {
-                    Some(resource) => grant_resource.as_ref() == Some(resource),
-                    None => true,
-                };
-                let remove = matches_base && matches_resource;
-                if remove && *scope == Scope::Always {
-                    removed_always = true;
-                }
-                !remove
-            });
+            grants.retain(
+                |(grant_principal, grant_capability, grant_resource), scope| {
+                    let matches_base =
+                        grant_principal == principal && grant_capability == capability;
+                    let matches_resource = match normalized_resource.as_ref() {
+                        Some(resource) => grant_resource.as_ref() == Some(resource),
+                        None => true,
+                    };
+                    let remove = matches_base && matches_resource;
+                    if remove && *scope == Scope::Always {
+                        removed_always = true;
+                    }
+                    !remove
+                },
+            );
         }
 
         if removed_always {
@@ -586,14 +586,15 @@ mod tests {
     use super::*;
 
     fn temp_engine(name: &str, timeout: Duration) -> (PermissionEngine, PathBuf) {
-        let dir = std::env::temp_dir().join(format!("volo_engine_test_{}_{}", name, uuid::Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!(
+            "volo_engine_test_{}_{}",
+            name,
+            uuid::Uuid::new_v4()
+        ));
         std::fs::create_dir_all(&dir).unwrap();
-        let engine = PermissionEngine::new(
-            dir.join("permissions.json"),
-            dir.join("audit.db"),
-            timeout,
-        )
-        .unwrap();
+        let engine =
+            PermissionEngine::new(dir.join("permissions.json"), dir.join("audit.db"), timeout)
+                .unwrap();
         (engine, dir)
     }
 
@@ -606,7 +607,11 @@ mod tests {
     #[test]
     fn test_declared_exact_match() {
         let permissions = perms(&["clipboard.read", "fs.read"]);
-        assert!(PermissionEngine::declared(&permissions, "clipboard.read", None));
+        assert!(PermissionEngine::declared(
+            &permissions,
+            "clipboard.read",
+            None
+        ));
         assert!(PermissionEngine::declared(&permissions, "fs.read", None));
         assert!(PermissionEngine::declared(
             &permissions,
@@ -713,7 +718,12 @@ mod tests {
     #[test]
     fn test_decide_matrix() {
         // 未声明：任何风险等级都 Deny
-        for risk in [RiskLevel::Low, RiskLevel::Medium, RiskLevel::High, RiskLevel::Critical] {
+        for risk in [
+            RiskLevel::Low,
+            RiskLevel::Medium,
+            RiskLevel::High,
+            RiskLevel::Critical,
+        ] {
             assert_eq!(decide(false, risk, None), Decision::Deny);
             assert_eq!(decide(false, risk, Some(Scope::Always)), Decision::Deny);
         }
@@ -726,7 +736,10 @@ mod tests {
 
         // 已声明、有授权：任何等级 Allow
         for scope in [Scope::Once, Scope::Session, Scope::Always] {
-            assert_eq!(decide(true, RiskLevel::Medium, Some(scope)), Decision::Allow);
+            assert_eq!(
+                decide(true, RiskLevel::Medium, Some(scope)),
+                Decision::Allow
+            );
             assert_eq!(decide(true, RiskLevel::High, Some(scope)), Decision::Allow);
         }
     }
@@ -749,13 +762,7 @@ mod tests {
         });
 
         let result = engine
-            .wait_for_response(
-                &request_id,
-                "plugin-a",
-                "clipboard.read",
-                None,
-                rx,
-            )
+            .wait_for_response(&request_id, "plugin-a", "clipboard.read", None, rx)
             .await;
         assert!(result.is_ok());
 
@@ -779,31 +786,17 @@ mod tests {
         let (request_id, rx) = engine.begin_request().unwrap();
         engine.respond(&request_id, true, Scope::Session).unwrap();
         engine
-            .wait_for_response(
-                &request_id,
-                "plugin-a",
-                "fs.read",
-                Some("/A/file.txt"),
-                rx,
-            )
+            .wait_for_response(&request_id, "plugin-a", "fs.read", Some("/A/file.txt"), rx)
             .await
             .unwrap();
 
         let grants = engine.grants.lock().unwrap();
         assert_eq!(
-            grants.get(&grant_key(
-                "plugin-a",
-                "fs.read",
-                Some("/A/file.txt")
-            )),
+            grants.get(&grant_key("plugin-a", "fs.read", Some("/A/file.txt"))),
             Some(&Scope::Session)
         );
         assert!(grants
-            .get(&grant_key(
-                "plugin-a",
-                "fs.read",
-                Some("/B/file.txt")
-            ))
+            .get(&grant_key("plugin-a", "fs.read", Some("/B/file.txt")))
             .is_none());
         drop(grants);
 
@@ -854,13 +847,7 @@ mod tests {
         engine.respond(&request_id, true, Scope::Always).unwrap();
 
         engine
-            .wait_for_response(
-                &request_id,
-                "plugin-a",
-                "fs.write",
-                Some("/tmp/x"),
-                rx,
-            )
+            .wait_for_response(&request_id, "plugin-a", "fs.write", Some("/tmp/x"), rx)
             .await
             .unwrap();
 

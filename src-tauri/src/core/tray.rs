@@ -1,11 +1,11 @@
 //! 系统托盘模块
 
+use crate::error::Result;
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{TrayIcon, TrayIconBuilder},
     AppHandle, Manager,
 };
-use crate::error::Result;
 
 /// 创建系统托盘
 pub fn create_tray(app: &AppHandle) -> Result<TrayIcon> {
@@ -13,9 +13,9 @@ pub fn create_tray(app: &AppHandle) -> Result<TrayIcon> {
     let show = MenuItem::with_id(app, "show", "显示主窗口", true, None::<&str>)?;
     let settings = MenuItem::with_id(app, "settings", "设置", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
-    
+
     let menu = Menu::with_items(app, &[&show, &settings, &quit])?;
-    
+
     // 创建托盘图标
     let tray = TrayIconBuilder::new()
         .icon(app.default_window_icon().unwrap().clone())
@@ -55,6 +55,6 @@ pub fn create_tray(app: &AppHandle) -> Result<TrayIcon> {
             }
         })
         .build(app)?;
-    
+
     Ok(tray)
 }

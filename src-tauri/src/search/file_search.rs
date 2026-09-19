@@ -1,9 +1,9 @@
 //! 文件搜索模块
 
+use crate::error::{Result, VoloError};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use crate::error::{Result, VoloError};
 
 /// 文件信息
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -84,7 +84,12 @@ impl FileSearcher {
     }
 
     /// 递归索引目录
-    fn index_directory(&self, dir: &PathBuf, entries: &mut Vec<FileEntry>, depth: usize) -> Result<()> {
+    fn index_directory(
+        &self,
+        dir: &PathBuf,
+        entries: &mut Vec<FileEntry>,
+        depth: usize,
+    ) -> Result<()> {
         if depth == 0 {
             return Ok(());
         }
@@ -105,7 +110,9 @@ impl FileSearcher {
             let is_dir = metadata.as_ref().map(|m| m.is_dir()).unwrap_or(false);
 
             let file_type = if is_dir { "directory" } else { "file" };
-            let extension = path.extension().map(|e| e.to_string_lossy().to_string().to_lowercase());
+            let extension = path
+                .extension()
+                .map(|e| e.to_string_lossy().to_string().to_lowercase());
 
             entries.push(FileEntry {
                 path: path.clone(),
@@ -126,7 +133,9 @@ impl FileSearcher {
 
     /// 搜索文件
     pub fn search(&self, query: &str, limit: usize) -> Result<Vec<FileInfo>> {
-        let inner = self.inner.lock()
+        let inner = self
+            .inner
+            .lock()
             .map_err(|_| VoloError::Other("Failed to lock entries".to_string()))?;
 
         let query_lower = query.to_lowercase();
@@ -175,9 +184,10 @@ impl FileSearcher {
             .into_iter()
             .map(|(entry, _)| {
                 let metadata = std::fs::metadata(&entry.path).ok();
-                let size = metadata.as_ref().and_then(|m| {
-                    if m.is_file() { Some(m.len()) } else { None }
-                });
+                let size =
+                    metadata
+                        .as_ref()
+                        .and_then(|m| if m.is_file() { Some(m.len()) } else { None });
                 let modified = metadata.as_ref().and_then(|m| {
                     m.modified().ok().and_then(|t| {
                         let datetime: chrono::DateTime<chrono::Utc> = t.into();

@@ -11,8 +11,10 @@ pub fn get_app_icon(app_path: &str) -> Result<Option<String>> {
     let app_path = Path::new(app_path);
 
     // 检查是否是 .exe 或 .lnk
-    let ext = app_path.extension().map(|e| e.to_string_lossy().to_string());
-    
+    let ext = app_path
+        .extension()
+        .map(|e| e.to_string_lossy().to_string());
+
     match ext.as_deref() {
         Some("exe") => get_exe_icon(app_path),
         Some("lnk") => get_lnk_icon(app_path),
@@ -130,13 +132,14 @@ fn scan_directory(dir: &Path, apps: &mut Vec<(String, String)>) -> Result<()> {
             scan_directory(&path, apps)?;
         } else {
             let ext = path.extension().map(|e| e.to_string_lossy().to_string());
-            
+
             match ext.as_deref() {
                 Some("lnk") | Some("exe") | Some("url") => {
-                    let name = path.file_stem()
+                    let name = path
+                        .file_stem()
                         .map(|s| s.to_string_lossy().to_string())
                         .unwrap_or_default();
-                    
+
                     if !name.is_empty() {
                         apps.push((name, path.to_string_lossy().to_string()));
                     }
@@ -196,7 +199,7 @@ pub fn scan_registry_apps() -> Result<Vec<(String, String)>> {
     // 扫描卸载注册表项
     let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
     let uninstall = hklm.open_subkey("SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall");
-    
+
     if let Ok(uninstall) = uninstall {
         for key in uninstall.enum_keys().filter_map(|k| k.ok()) {
             if let Ok(subkey) = uninstall.open_subkey(&key) {
@@ -217,7 +220,7 @@ pub fn scan_registry_apps() -> Result<Vec<(String, String)>> {
     // 扫描用户卸载注册表项
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     let uninstall = hkcu.open_subkey("SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall");
-    
+
     if let Ok(uninstall) = uninstall {
         for key in uninstall.enum_keys().filter_map(|k| k.ok()) {
             if let Ok(subkey) = uninstall.open_subkey(&key) {
@@ -250,7 +253,7 @@ fn find_executable_in_dir(dir: &str) -> Option<String> {
     for entry in std::fs::read_dir(path).ok()? {
         let entry = entry.ok()?;
         let path = entry.path();
-        
+
         if let Some(ext) = path.extension() {
             if ext == "exe" {
                 let file_name = path.file_name()?.to_string_lossy().to_lowercase();
@@ -266,7 +269,7 @@ fn find_executable_in_dir(dir: &str) -> Option<String> {
     for entry in std::fs::read_dir(path).ok()? {
         let entry = entry.ok()?;
         let path = entry.path();
-        
+
         if let Some(ext) = path.extension() {
             if ext == "exe" {
                 return Some(path.to_string_lossy().to_string());
@@ -280,7 +283,7 @@ fn find_executable_in_dir(dir: &str) -> Option<String> {
 /// 打开应用
 pub fn open_app(app_path: &str) -> Result<()> {
     let path = Path::new(app_path);
-    
+
     if path.extension().map_or(false, |e| e == "lnk") {
         // 使用快捷方式打开
         Command::new("cmd")

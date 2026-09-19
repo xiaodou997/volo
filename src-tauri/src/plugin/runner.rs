@@ -1,9 +1,9 @@
 //! 插件运行器
 
+use crate::error::{Result, VoloError};
+use crate::plugin::manager::{Feature, Plugin};
 use std::path::PathBuf;
 use tauri::AppHandle;
-use crate::plugin::manager::{Plugin, Feature};
-use crate::error::{Result, VoloError};
 
 /// 插件运行时信息
 #[derive(Debug, Clone, serde::Serialize)]
@@ -41,10 +41,13 @@ pub fn get_plugin_runtime(
     feature_id: String,
     state: tauri::State<'_, crate::plugin::manager::PluginState>,
 ) -> Result<PluginRuntime> {
-    let plugin = state.get_plugin(&plugin_id)
+    let plugin = state
+        .get_plugin(&plugin_id)
         .ok_or_else(|| VoloError::NotFound(plugin_id.clone()))?;
 
-    let feature = plugin.features.iter()
+    let feature = plugin
+        .features
+        .iter()
         .find(|f| f.id == feature_id)
         .cloned()
         .ok_or_else(|| VoloError::NotFound(feature_id.clone()))?;
@@ -58,7 +61,8 @@ pub fn get_plugin_html(
     plugin_id: String,
     state: tauri::State<'_, crate::plugin::manager::PluginState>,
 ) -> Result<String> {
-    let plugin = state.get_plugin(&plugin_id)
+    let plugin = state
+        .get_plugin(&plugin_id)
         .ok_or_else(|| VoloError::NotFound(plugin_id.clone()))?;
 
     let html_path = plugin.path.join(&plugin.main);
@@ -80,7 +84,8 @@ pub fn get_plugin_asset_path(
     asset_name: String,
     state: tauri::State<'_, crate::plugin::manager::PluginState>,
 ) -> Result<String> {
-    let plugin = state.get_plugin(&plugin_id)
+    let plugin = state
+        .get_plugin(&plugin_id)
         .ok_or_else(|| VoloError::NotFound(plugin_id.clone()))?;
 
     let asset_path = plugin.path.join(&asset_name);
@@ -95,9 +100,13 @@ pub fn get_plugin_asset_path(
 ///
 /// command 与 tool 的 run 字段共用；run 指向的文件不存在时返回 NotFound
 pub fn resolve_run_source(plugin: &Plugin, run: &str) -> Result<PathBuf> {
-    let base = plugin.path.canonicalize()
+    let base = plugin
+        .path
+        .canonicalize()
         .map_err(|e| VoloError::Plugin(format!("Failed to resolve plugin dir: {}", e)))?;
-    let source_path = base.join(run).canonicalize()
+    let source_path = base
+        .join(run)
+        .canonicalize()
         .map_err(|_| VoloError::NotFound(run.to_string()))?;
 
     if !source_path.starts_with(&base) {
@@ -112,7 +121,10 @@ pub fn resolve_run_source(plugin: &Plugin, run: &str) -> Result<PathBuf> {
 
 /// 解析命令源码路径，防止路径穿越脱出插件目录
 fn resolve_command_source(plugin: &Plugin, command_id: &str) -> Result<PathBuf> {
-    let command = plugin.contributes.commands.iter()
+    let command = plugin
+        .contributes
+        .commands
+        .iter()
         .find(|c| c.id == command_id)
         .ok_or_else(|| VoloError::NotFound(command_id.to_string()))?;
 
@@ -126,7 +138,8 @@ pub fn get_plugin_command_source(
     command_id: String,
     state: tauri::State<'_, crate::plugin::manager::PluginState>,
 ) -> Result<String> {
-    let plugin = state.get_plugin(&plugin_id)
+    let plugin = state
+        .get_plugin(&plugin_id)
         .ok_or_else(|| VoloError::NotFound(plugin_id.clone()))?;
 
     let source_path = resolve_command_source(&plugin, &command_id)?;
@@ -142,10 +155,14 @@ pub fn get_plugin_tool_source(
     tool_id: String,
     state: tauri::State<'_, crate::plugin::manager::PluginState>,
 ) -> Result<String> {
-    let plugin = state.get_plugin(&plugin_id)
+    let plugin = state
+        .get_plugin(&plugin_id)
         .ok_or_else(|| VoloError::NotFound(plugin_id.clone()))?;
 
-    let tool = plugin.contributes.tools.iter()
+    let tool = plugin
+        .contributes
+        .tools
+        .iter()
         .find(|t| t.id == tool_id)
         .ok_or_else(|| VoloError::NotFound(tool_id.clone()))?;
 
@@ -179,7 +196,11 @@ mod tests {
     use crate::plugin::manager::{CommandSpec, Contributes};
 
     fn temp_plugin_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("volo_runner_test_{}_{}", name, uuid::Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!(
+            "volo_runner_test_{}_{}",
+            name,
+            uuid::Uuid::new_v4()
+        ));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }

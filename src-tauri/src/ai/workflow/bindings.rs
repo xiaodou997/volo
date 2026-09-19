@@ -49,9 +49,10 @@ fn resolve_string(text: &str, context: &WorkflowContext) -> Result<Value> {
                 "workflow step 引用缺少 step id: ${steps.}".to_string(),
             ));
         }
-        return context.output(step_id).cloned().ok_or_else(|| {
-            VoloError::Other(format!("workflow 找不到 step 输出: {}", step_id))
-        });
+        return context
+            .output(step_id)
+            .cloned()
+            .ok_or_else(|| VoloError::Other(format!("workflow 找不到 step 输出: {}", step_id)));
     }
     Ok(Value::String(text.to_string()))
 }

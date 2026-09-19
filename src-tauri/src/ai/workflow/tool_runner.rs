@@ -14,7 +14,8 @@ use super::{WorkflowContext, WorkflowStep, WorkflowStepRunner};
 mod bindings;
 use bindings::resolve_workflow_value;
 
-const WORKFLOW_AI_SYSTEM_PROMPT: &str = "你正在执行 Volo Workflow 的一个 AI step。只完成当前 step 指令，并使用提供的 Workflow 上下文。";
+const WORKFLOW_AI_SYSTEM_PROMPT: &str =
+    "你正在执行 Volo Workflow 的一个 AI step。只完成当前 step 指令，并使用提供的 Workflow 上下文。";
 
 /// Workflow step 适配器。
 ///
@@ -61,7 +62,10 @@ impl<'a> WorkflowToolRunner<'a> {
             "previousOutput": context.previous_output(),
             "outputs": context.outputs(),
         }))?;
-        Ok(format!("当前 step 指令：\n{}\n\nWorkflow 上下文：\n{}", prompt, context))
+        Ok(format!(
+            "当前 step 指令：\n{}\n\nWorkflow 上下文：\n{}",
+            prompt, context
+        ))
     }
 
     async fn run_ai(&self, prompt: &str, context: &WorkflowContext) -> Result<Value> {
@@ -76,15 +80,14 @@ impl<'a> WorkflowToolRunner<'a> {
             Some(timeout) => tokio::time::timeout(timeout, backend.chat(&messages, &[]))
                 .await
                 .map_err(|_| {
-                    VoloError::Other(format!(
-                        "workflow AI step 超时（{} 秒）",
-                        timeout.as_secs()
-                    ))
+                    VoloError::Other(format!("workflow AI step 超时（{} 秒）", timeout.as_secs()))
                 })??,
             None => backend.chat(&messages, &[]).await?,
         };
         if !response.tool_calls.is_empty() {
-            return Err(VoloError::Other("workflow AI step 不接受 tool call 响应".to_string()));
+            return Err(VoloError::Other(
+                "workflow AI step 不接受 tool call 响应".to_string(),
+            ));
         }
         let content = response
             .content
@@ -121,10 +124,16 @@ mod tests {
     use serde_json::json;
     use std::sync::Mutex;
 
-    struct MockToolExecutor { calls: Mutex<Vec<(String, Value)>> }
+    struct MockToolExecutor {
+        calls: Mutex<Vec<(String, Value)>>,
+    }
 
     impl MockToolExecutor {
-        fn new() -> Self { Self { calls: Mutex::new(Vec::new()) } }
+        fn new() -> Self {
+            Self {
+                calls: Mutex::new(Vec::new()),
+            }
+        }
     }
 
     impl ToolExecutor for MockToolExecutor {
@@ -134,7 +143,10 @@ mod tests {
             args: Value,
         ) -> Pin<Box<dyn Future<Output = Result<Value>> + Send + 'a>> {
             Box::pin(async move {
-                self.calls.lock().unwrap().push((name.to_string(), args.clone()));
+                self.calls
+                    .lock()
+                    .unwrap()
+                    .push((name.to_string(), args.clone()));
                 Ok(json!({ "tool": name, "args": args }))
             })
         }
@@ -164,8 +176,18 @@ mod tests {
     }
 
     impl MockChatBackend {
-        fn new() -> Self { Self { calls: Mutex::new(Vec::new()), return_tool_call: false } }
-        fn with_tool_call() -> Self { Self { calls: Mutex::new(Vec::new()), return_tool_call: true } }
+        fn new() -> Self {
+            Self {
+                calls: Mutex::new(Vec::new()),
+                return_tool_call: false,
+            }
+        }
+        fn with_tool_call() -> Self {
+            Self {
+                calls: Mutex::new(Vec::new()),
+                return_tool_call: true,
+            }
+        }
     }
 
     impl ChatBackend for MockChatBackend {
@@ -176,13 +198,20 @@ mod tests {
         ) -> Pin<Box<dyn Future<Output = Result<ChatResponse>> + Send + 'a>> {
             Box::pin(async move {
                 self.calls.lock().unwrap().push((
-                    messages.iter().map(|m| m.content.clone().unwrap_or_default()).collect(),
+                    messages
+                        .iter()
+                        .map(|m| m.content.clone().unwrap_or_default())
+                        .collect(),
                     tools.len(),
                 ));
                 Ok(ChatResponse {
                     content: Some("这是摘要".to_string()),
                     tool_calls: if self.return_tool_call {
-                        vec![ToolCall { id: "call-1".into(), name: "clipboard_read".into(), arguments: json!({}) }]
+                        vec![ToolCall {
+                            id: "call-1".into(),
+                            name: "clipboard_read".into(),
+                            arguments: json!({}),
+                        }]
                     } else {
                         vec![]
                     },
@@ -205,7 +234,9 @@ mod tests {
             }],
         };
         let input = json!({ "count": 2, "enabled": true });
-        let execution = execute_workflow(&workflow, input.clone(), &runner).await.unwrap();
+        let execution = execute_workflow(&workflow, input.clone(), &runner)
+            .await
+            .unwrap();
         assert_eq!(execution.status, WorkflowExecutionStatus::Completed);
         let calls = executor.calls.lock().unwrap();
         assert_eq!(calls.len(), 1);
@@ -233,9 +264,14 @@ mod tests {
                 },
             ],
         };
-        let execution = execute_workflow(&workflow, json!({ "source": "manual" }), &runner).await.unwrap();
+        let execution = execute_workflow(&workflow, json!({ "source": "manual" }), &runner)
+            .await
+            .unwrap();
         assert_eq!(execution.status, WorkflowExecutionStatus::Completed);
-        assert_eq!(execution.output, Some(Value::String("这是摘要".to_string())));
+        assert_eq!(
+            execution.output,
+            Some(Value::String("这是摘要".to_string()))
+        );
         let calls = backend.calls.lock().unwrap();
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].1, 0);
@@ -266,11 +302,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(execution.status, WorkflowExecutionStatus::Failed);
-        assert!(execution
-            .error
-            .as_deref()
-            .unwrap()
-            .contains("AI step 超时"));
+        assert!(execution.error.as_deref().unwrap().contains("AI step 超时"));
     }
 
     #[tokio::test]
@@ -281,10 +313,19 @@ mod tests {
         let workflow = Workflow {
             id: "ai-demo".into(),
             name: "AI Demo".into(),
-            steps: vec![WorkflowStep::Ai { id: "summary".into(), prompt: "总结".into() }],
+            steps: vec![WorkflowStep::Ai {
+                id: "summary".into(),
+                prompt: "总结".into(),
+            }],
         };
-        let execution = execute_workflow(&workflow, Value::Null, &runner).await.unwrap();
+        let execution = execute_workflow(&workflow, Value::Null, &runner)
+            .await
+            .unwrap();
         assert_eq!(execution.status, WorkflowExecutionStatus::Failed);
-        assert!(execution.error.as_deref().unwrap().contains("不接受 tool call 响应"));
+        assert!(execution
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("不接受 tool call 响应"));
     }
 }

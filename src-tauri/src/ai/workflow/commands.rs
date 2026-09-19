@@ -79,10 +79,7 @@ async fn execute_and_record(
 
     let execution = execute_workflow(workflow, input, &runner).await?;
     let finished_at = Utc::now();
-    let duration_ms = started
-        .elapsed()
-        .as_millis()
-        .min(u128::from(u64::MAX)) as u64;
+    let duration_ms = started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
     let record = history::build_record_with_context(
         workflow,
         &execution,
@@ -93,8 +90,8 @@ async fn execute_and_record(
     );
 
     // Audit 属于旁路能力：不能因为磁盘/目录问题把已经完成的 Workflow 改判为失败。
-    let audit_result = history::workflow_runs_dir(app)
-        .and_then(|dir| history::record_run(&dir, &record));
+    let audit_result =
+        history::workflow_runs_dir(app).and_then(|dir| history::record_run(&dir, &record));
     if let Err(error) = audit_result {
         tracing::warn!(
             workflow_id = %workflow.id,
@@ -136,10 +133,7 @@ pub fn workflow_list_runs(
     app: AppHandle,
     workflow_id: Option<String>,
 ) -> Result<Vec<history::WorkflowRunRecord>> {
-    history::list_runs(
-        &history::workflow_runs_dir(&app)?,
-        workflow_id.as_deref(),
-    )
+    history::list_runs(&history::workflow_runs_dir(&app)?, workflow_id.as_deref())
 }
 
 /// 前台手动执行一个 Workflow。

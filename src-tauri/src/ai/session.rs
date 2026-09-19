@@ -74,8 +74,12 @@ pub fn cleanup_old_sessions(dir: &Path, max_age_days: u64) -> Result<usize> {
         if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
             continue;
         }
-        let Ok(metadata) = entry.metadata() else { continue };
-        let Ok(modified) = metadata.modified() else { continue };
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
+        let Ok(modified) = metadata.modified() else {
+            continue;
+        };
         if modified < cutoff && fs::remove_file(&path).is_ok() {
             removed += 1;
         }
@@ -201,7 +205,9 @@ fn first_user_query(path: &Path) -> String {
         return String::new();
     };
     for line in content.lines() {
-        let Ok(v) = serde_json::from_str::<Value>(line) else { continue };
+        let Ok(v) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
         if v["kind"] == "user_input" {
             if let Some(query) = v["payload"]["query"].as_str() {
                 const MAX: usize = 50;
@@ -222,7 +228,10 @@ fn validate_session_id(session_id: &str) -> Result<()> {
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '-')
     {
-        return Err(VoloError::Other(format!("非法的 session_id: {}", session_id)));
+        return Err(VoloError::Other(format!(
+            "非法的 session_id: {}",
+            session_id
+        )));
     }
     Ok(())
 }
@@ -241,7 +250,9 @@ fn read_session(dir: &Path, session_id: &str) -> Result<Vec<ReplayEvent>> {
 
     let mut events = Vec::new();
     for line in content.lines() {
-        let Ok(v) = serde_json::from_str::<Value>(line) else { continue };
+        let Ok(v) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
         let payload = &v["payload"];
         match v["kind"].as_str().unwrap_or("") {
             "user_input" => {
@@ -293,7 +304,9 @@ pub fn rebuild_history(dir: &Path, session_id: &str) -> Result<Vec<Message>> {
     // 最后一帧 history 快照即最完整的对话历史
     let mut snapshot: Option<Vec<Message>> = None;
     for line in content.lines() {
-        let Ok(v) = serde_json::from_str::<Value>(line) else { continue };
+        let Ok(v) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
         if v["kind"] == "history" {
             if let Ok(messages) =
                 serde_json::from_value::<Vec<Message>>(v["payload"]["messages"].clone())
@@ -309,7 +322,9 @@ pub fn rebuild_history(dir: &Path, session_id: &str) -> Result<Vec<Message>> {
     // 旧格式退化重建：system + 问答对（纯 tool_call 轮不产生 assistant 文本，跳过）
     let mut messages = vec![Message::system(SYSTEM_PROMPT)];
     for line in content.lines() {
-        let Ok(v) = serde_json::from_str::<Value>(line) else { continue };
+        let Ok(v) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
         let payload = &v["payload"];
         match v["kind"].as_str().unwrap_or("") {
             "user_input" => {
@@ -436,7 +451,11 @@ mod tests {
     #[test]
     fn test_list_sessions_desc_preview_and_started_at() {
         let dir = temp_sessions_dir("list");
-        write_fixture(&dir, "20260810-100000-aaaaaaaa", &[user_input("第一条会话")]);
+        write_fixture(
+            &dir,
+            "20260810-100000-aaaaaaaa",
+            &[user_input("第一条会话")],
+        );
         // 长 query 验证 50 字符截断；另有一个非 jsonl 文件应被忽略
         write_fixture(
             &dir,
@@ -487,7 +506,10 @@ mod tests {
         let events = read_session(&dir, id).unwrap();
         let kinds: Vec<&str> = events.iter().map(|e| e.kind.as_str()).collect();
         // content 为 null 的 model_response 与 done 都不产回放事件
-        assert_eq!(kinds, vec!["user", "tool_call", "tool_result", "message", "error"]);
+        assert_eq!(
+            kinds,
+            vec!["user", "tool_call", "tool_result", "message", "error"]
+        );
         assert_eq!(events[0].content.as_deref(), Some("剪贴板里有什么"));
         assert_eq!(events[1].name.as_deref(), Some("clipboard_read"));
         assert_eq!(events[1].args, Some(json!({})));
@@ -546,10 +568,7 @@ mod tests {
         assert_eq!(messages[0].role, "system");
         assert_eq!(messages[3].content.as_deref(), Some("第二问"));
         assert_eq!(messages[4].role, "assistant");
-        assert_eq!(
-            messages[4].tool_calls.as_ref().unwrap()[0].name,
-            "fs_read"
-        );
+        assert_eq!(messages[4].tool_calls.as_ref().unwrap()[0].name, "fs_read");
         assert_eq!(messages[5].role, "tool");
         assert_eq!(messages[5].tool_call_id.as_deref(), Some("call_1"));
         assert_eq!(messages[5].content.as_deref(), Some("文件内容"));
@@ -579,7 +598,10 @@ mod tests {
 
         let messages = rebuild_history(&dir, id).unwrap();
         let roles: Vec<&str> = messages.iter().map(|m| m.role.as_str()).collect();
-        assert_eq!(roles, vec!["system", "user", "assistant", "user", "assistant"]);
+        assert_eq!(
+            roles,
+            vec!["system", "user", "assistant", "user", "assistant"]
+        );
         assert_eq!(messages[1].content.as_deref(), Some("剪贴板里有什么"));
         assert_eq!(messages[2].content.as_deref(), Some("剪贴板里是：你好"));
         assert_eq!(messages[3].content.as_deref(), Some("再说一遍"));

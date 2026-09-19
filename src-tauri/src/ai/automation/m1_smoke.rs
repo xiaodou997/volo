@@ -17,9 +17,7 @@ use crate::ai::workflow::commands::{history, storage as workflow_storage};
 use crate::ai::workflow::{
     execute_workflow, Workflow, WorkflowExecutionStatus, WorkflowStep, WorkflowToolRunner,
 };
-use crate::core::permission::{
-    enforce_background, store, Grant, PermissionEngine, Scope,
-};
+use crate::core::permission::{enforce_background, store, Grant, PermissionEngine, Scope};
 use crate::error::{Result, VoloError};
 
 use super::storage::{claim_due_automations, list_automations, save_automation};
@@ -58,14 +56,12 @@ impl SmokeHeadlessHost {
     }
 
     fn string_arg<'a>(args: &'a Value, name: &str, method: &str) -> Result<&'a str> {
-        args.get(name)
-            .and_then(Value::as_str)
-            .ok_or_else(|| {
-                VoloError::Other(format!(
-                    "M1 smoke host method '{}' requires string argument '{}'",
-                    method, name
-                ))
-            })
+        args.get(name).and_then(Value::as_str).ok_or_else(|| {
+            VoloError::Other(format!(
+                "M1 smoke host method '{}' requires string argument '{}'",
+                method, name
+            ))
+        })
     }
 
     fn authorize(&self, resource: &str) -> Result<()> {
@@ -161,14 +157,9 @@ impl ToolExecutor for SmokeToolExecutor {
                         "notification.show",
                         None,
                     )?;
-                    let body = args
-                        .get("body")
-                        .and_then(Value::as_str)
-                        .ok_or_else(|| {
-                            VoloError::Other(
-                                "M1 smoke notification requires body".to_string(),
-                            )
-                        })?;
+                    let body = args.get("body").and_then(Value::as_str).ok_or_else(|| {
+                        VoloError::Other("M1 smoke notification requires body".to_string())
+                    })?;
                     self.notifications
                         .lock()
                         .map_err(|_| VoloError::Other("notification lock poisoned".to_string()))?
@@ -211,10 +202,8 @@ impl ChatBackend for SmokeChatBackend {
 }
 
 fn test_root() -> PathBuf {
-    let root = std::env::temp_dir().join(format!(
-        "volo-m1-automation-smoke-{}",
-        uuid::Uuid::new_v4()
-    ));
+    let root =
+        std::env::temp_dir().join(format!("volo-m1-automation-smoke-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&root).unwrap();
     root
 }
@@ -229,22 +218,13 @@ fn normalized(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
 }
 
-fn permission_engine(
-    root: &Path,
-    name: &str,
-    grants: &[Grant],
-) -> Arc<PermissionEngine> {
+fn permission_engine(root: &Path, name: &str, grants: &[Grant]) -> Arc<PermissionEngine> {
     let dir = root.join(name);
     std::fs::create_dir_all(&dir).unwrap();
     let store_path = dir.join("permissions.json");
     store::save_grants(&store_path, grants).unwrap();
     Arc::new(
-        PermissionEngine::new(
-            store_path,
-            dir.join("audit.db"),
-            Duration::from_millis(50),
-        )
-        .unwrap(),
+        PermissionEngine::new(store_path, dir.join("audit.db"), Duration::from_millis(50)).unwrap(),
     )
 }
 
@@ -262,14 +242,12 @@ async fn m1_real_background_contract_closes_the_loop() {
     std::fs::write(&input_file, "M1 secret payload").unwrap();
     std::fs::write(&sibling_file, "visible in directory listing").unwrap();
 
-    let canonical_dir = crate::api::fs::canonicalize_existing_plugin_path(
-        input_dir.to_string_lossy().as_ref(),
-    )
-    .unwrap();
-    let canonical_file = crate::api::fs::canonicalize_existing_plugin_path(
-        input_file.to_string_lossy().as_ref(),
-    )
-    .unwrap();
+    let canonical_dir =
+        crate::api::fs::canonicalize_existing_plugin_path(input_dir.to_string_lossy().as_ref())
+            .unwrap();
+    let canonical_file =
+        crate::api::fs::canonicalize_existing_plugin_path(input_file.to_string_lossy().as_ref())
+            .unwrap();
     let dir_resource = normalized(&canonical_dir);
     let file_resource = normalized(&canonical_file);
     let principal = "workflow:m1-real-loop";
@@ -358,9 +336,7 @@ async fn m1_real_background_contract_closes_the_loop() {
         id: "m1-real-loop-job".to_string(),
         workflow_id: workflow.id.clone(),
         enabled: true,
-        trigger: AutomationTrigger::Interval {
-            every_minutes: 15,
-        },
+        trigger: AutomationTrigger::Interval { every_minutes: 15 },
         retry_policy: None,
     };
     save_automation(&automations_dir, automation, at(12, 0)).unwrap();
@@ -380,11 +356,8 @@ async fn m1_real_background_contract_closes_the_loop() {
         Some(at(12, 30))
     );
 
-    let persisted = workflow_storage::load_workflow(
-        &workflows_dir,
-        &claim.automation.workflow_id,
-    )
-    .unwrap();
+    let persisted =
+        workflow_storage::load_workflow(&workflows_dir, &claim.automation.workflow_id).unwrap();
 
     let host = Arc::new(SmokeHeadlessHost::new(
         allowed_engine,
@@ -400,18 +373,18 @@ async fn m1_real_background_contract_closes_the_loop() {
     let backend = SmokeChatBackend {
         seen_messages: seen_messages.clone(),
     };
-    let runner = WorkflowToolRunner::with_backend_timeout(
-        &executor,
-        &backend,
-        Duration::from_secs(1),
-    );
+    let runner =
+        WorkflowToolRunner::with_backend_timeout(&executor, &backend, Duration::from_secs(1));
 
     let execution = execute_workflow(&persisted, Value::Null, &runner)
         .await
         .unwrap();
     assert_eq!(execution.status, WorkflowExecutionStatus::Completed);
     assert_eq!(execution.steps.len(), 3);
-    assert_eq!(execution.output, Some(Value::String("notification-recorded".to_string())));
+    assert_eq!(
+        execution.output,
+        Some(Value::String("notification-recorded".to_string()))
+    );
 
     let ai_messages = seen_messages.lock().unwrap();
     assert_eq!(ai_messages.len(), 1);
@@ -443,7 +416,10 @@ async fn m1_real_background_contract_closes_the_loop() {
     assert_eq!(runs.len(), 1);
     assert_eq!(runs[0].source, history::WorkflowRunSource::Automation);
     assert_eq!(runs[0].automation_id.as_deref(), Some("m1-real-loop-job"));
-    assert_eq!(runs[0].scheduled_for.as_deref(), Some("2026-09-19T12:15:00.000Z"));
+    assert_eq!(
+        runs[0].scheduled_for.as_deref(),
+        Some("2026-09-19T12:15:00.000Z")
+    );
     assert_eq!(runs[0].retry_attempt, None);
     assert_eq!(runs[0].status, WorkflowExecutionStatus::Completed);
     assert_eq!(runs[0].steps.len(), 3);

@@ -20,8 +20,7 @@ use objc2::runtime::Bool;
 use objc2_foundation::{NSError, NSString};
 use objc2_user_notifications::{
     UNAuthorizationOptions, UNAuthorizationStatus, UNMutableNotificationContent,
-    UNNotificationRequest, UNNotificationSound, UNNotificationSettings,
-    UNUserNotificationCenter,
+    UNNotificationRequest, UNNotificationSettings, UNNotificationSound, UNUserNotificationCenter,
 };
 
 use crate::error::{Result, VoloError};

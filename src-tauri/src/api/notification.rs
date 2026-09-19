@@ -1,13 +1,13 @@
 //! 通知 API
 
+use crate::core::permission::{require, PermissionEngine};
+use crate::error::{Result, VoloError};
+use crate::plugin::manager::PluginState;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use tauri::{AppHandle, Manager, State};
 use tauri_plugin_opener::OpenerExt;
-use crate::core::permission::{require, PermissionEngine};
-use crate::error::{Result, VoloError};
-use crate::plugin::manager::PluginState;
 
 #[derive(Debug, Deserialize)]
 pub struct NotificationOptions {
@@ -24,19 +24,30 @@ pub async fn notification_show(
     plugin_id: Option<String>,
     options: NotificationOptions,
 ) -> Result<()> {
-    require(&app, &engine, &plugins, plugin_id.as_deref(), "notification.show", None).await?;
+    require(
+        &app,
+        &engine,
+        &plugins,
+        plugin_id.as_deref(),
+        "notification.show",
+        None,
+    )
+    .await?;
 
     let title = options.title.unwrap_or_else(|| "Volo".to_string());
 
     #[cfg(not(target_os = "macos"))]
     {
-        let mut builder = app.notification().builder()
+        let mut builder = app
+            .notification()
+            .builder()
             .title(&title)
             .body(&options.body);
         if let Some(icon_path) = options.icon {
             builder = builder.icon(&icon_path);
         }
-        builder.show()
+        builder
+            .show()
             .map_err(|e| crate::error::VoloError::Other(e.to_string()))?;
         return Ok(());
     }
@@ -209,7 +220,10 @@ pub async fn notification_request_permission(
             "能看到这条通知，说明 Volo 通知已开启；如果看不到，请打开 系统设置 → 通知 → Volo，开启「允许通知」。",
         )
     } else {
-        ("Volo notification test", "This is a notification test from Volo.")
+        (
+            "Volo notification test",
+            "This is a notification test from Volo.",
+        )
     };
 
     show_system_notification(&app, title, body)?;
@@ -279,9 +293,9 @@ mod tests {
         #[cfg(target_os = "macos")]
         {
             let url = url.expect("macOS 必须提供通知设置深链");
-            assert!(url.starts_with(
-                "x-apple.systempreferences:com.apple.preference.notifications?id="
-            ));
+            assert!(
+                url.starts_with("x-apple.systempreferences:com.apple.preference.notifications?id=")
+            );
             assert!(url.ends_with("com.volo.app"));
         }
         #[cfg(target_os = "windows")]

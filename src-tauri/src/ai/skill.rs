@@ -40,9 +40,9 @@ fn parse_skill_md(content: &str) -> Result<(SkillMeta, String)> {
     let rest = content
         .strip_prefix("---")
         .ok_or_else(|| VoloError::Other("SKILL.md 缺少 frontmatter（--- 起始）".to_string()))?;
-    let end = rest
-        .find("\n---")
-        .ok_or_else(|| VoloError::Other("SKILL.md frontmatter 未闭合（缺少 --- 结尾）".to_string()))?;
+    let end = rest.find("\n---").ok_or_else(|| {
+        VoloError::Other("SKILL.md frontmatter 未闭合（缺少 --- 结尾）".to_string())
+    })?;
     let front = &rest[..end];
     let body = rest[end + 4..].trim_start().to_string();
 
@@ -66,9 +66,18 @@ fn parse_skill_md(content: &str) -> Result<(SkillMeta, String)> {
         }
     }
     if name.is_empty() {
-        return Err(VoloError::Other("SKILL.md frontmatter 缺少 name".to_string()));
+        return Err(VoloError::Other(
+            "SKILL.md frontmatter 缺少 name".to_string(),
+        ));
     }
-    Ok((SkillMeta { name, description, version }, body))
+    Ok((
+        SkillMeta {
+            name,
+            description,
+            version,
+        },
+        body,
+    ))
 }
 
 /// 读取单个技能目录（dir/SKILL.md），无效则返回 None
@@ -204,7 +213,11 @@ fn seed_from_dir(source: &Path, skills_dir: &Path) {
         }
         if target.exists() {
             if let Err(e) = fs::remove_dir_all(&target) {
-                tracing::warn!("Failed to remove outdated builtin skill {}: {}", meta.name, e);
+                tracing::warn!(
+                    "Failed to remove outdated builtin skill {}: {}",
+                    meta.name,
+                    e
+                );
                 continue;
             }
         }
@@ -268,11 +281,8 @@ mod tests {
     use super::*;
 
     fn temp_skills_dir(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "volo-skill-test-{}-{}",
-            tag,
-            uuid::Uuid::new_v4()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("volo-skill-test-{}-{}", tag, uuid::Uuid::new_v4()));
         fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -313,7 +323,11 @@ mod tests {
     fn test_scan_and_load() {
         let dir = temp_skills_dir("scan");
         write_skill(&dir, "weekly-report", VALID);
-        write_skill(&dir, "b-skill", "---\nname: alpha\ndescription: 排序在前\n---\nx");
+        write_skill(
+            &dir,
+            "b-skill",
+            "---\nname: alpha\ndescription: 排序在前\n---\nx",
+        );
         // 坏目录（无 SKILL.md / 非法 frontmatter）跳过
         fs::create_dir_all(dir.join("empty-dir")).unwrap();
         write_skill(&dir, "bad", "no frontmatter");
@@ -344,7 +358,11 @@ mod tests {
         assert!(skills.join("weekly-report/SKILL.md").exists());
 
         // 同名覆盖：改内容重装
-        write_skill(&source, "my-skill", "---\nname: weekly-report\ndescription: v2\n---\n新正文");
+        write_skill(
+            &source,
+            "my-skill",
+            "---\nname: weekly-report\ndescription: v2\n---\n新正文",
+        );
         install_from_dir(&skills, &source.join("my-skill")).unwrap();
         assert_eq!(scan_skills(&skills).len(), 1);
         assert_eq!(load_skill_body(&skills, "weekly-report").unwrap(), "新正文");

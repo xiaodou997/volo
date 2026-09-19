@@ -1,9 +1,9 @@
 //! 授权持久化
 //! 将 Always 范围的授权读写 config_dir/permissions.json
 
-use std::path::Path;
-use crate::error::Result;
 use super::engine::Grant;
+use crate::error::Result;
+use std::path::Path;
 
 /// 从 JSON 文件加载授权；文件不存在或损坏时返回空列表。
 /// 旧版记录没有 resource 字段时由 Grant 的 serde default 迁移为 None。
@@ -29,11 +29,12 @@ pub fn save_grants(path: &Path, grants: &[Grant]) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::engine::Scope;
+    use super::*;
 
     fn temp_path(name: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("volo_perm_test_{}_{}", name, uuid::Uuid::new_v4()));
+        let dir =
+            std::env::temp_dir().join(format!("volo_perm_test_{}_{}", name, uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         dir.join("permissions.json")
     }

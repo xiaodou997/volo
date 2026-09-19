@@ -59,7 +59,9 @@ impl McpHttpClient {
             )
             .await?;
 
-        client.notify("notifications/initialized", json!({})).await?;
+        client
+            .notify("notifications/initialized", json!({}))
+            .await?;
 
         let result = client.request("tools/list", json!({})).await?;
         let tools = parse_tools_list(&result);
@@ -71,7 +73,10 @@ impl McpHttpClient {
     pub async fn call_tool(&self, name: &str, arguments: Value) -> Result<Value> {
         let fut = async {
             let result = self
-                .request("tools/call", json!({ "name": name, "arguments": arguments }))
+                .request(
+                    "tools/call",
+                    json!({ "name": name, "arguments": arguments }),
+                )
                 .await?;
             extract_tool_text(&result, name)
         };
@@ -155,7 +160,10 @@ impl McpHttpClient {
         let mut req = self
             .http
             .post(&self.url)
-            .header(reqwest::header::ACCEPT, "application/json, text/event-stream")
+            .header(
+                reqwest::header::ACCEPT,
+                "application/json, text/event-stream",
+            )
             .json(msg);
         if let Some(sid) = self.session_id.lock().ok().and_then(|s| s.clone()) {
             req = req.header("mcp-session-id", sid);
