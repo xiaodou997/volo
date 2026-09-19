@@ -1,4 +1,4 @@
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use chrono::Utc;
 use serde_json::Value;
@@ -23,6 +23,8 @@ use super::{
 pub(crate) mod history;
 #[path = "storage.rs"]
 pub(crate) mod storage;
+
+const BACKGROUND_AI_STEP_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Workflow 在 PermissionEngine 中使用独立 principal，避免复用 Agent 的持久授权。
 pub(crate) fn workflow_principal(workflow_id: &str) -> String {
@@ -63,12 +65,16 @@ async fn execute_and_record(
     executor: &dyn ToolExecutor,
     llm_backend: Option<&OpenAiBackend>,
     run_context: history::WorkflowRunContext,
+    ai_timeout: Option<Duration>,
 ) -> Result<WorkflowExecution> {
     let started_at = Utc::now();
     let started = Instant::now();
-    let runner = match llm_backend {
-        Some(backend) => WorkflowToolRunner::with_backend(executor, backend),
-        None => WorkflowToolRunner::new(executor),
+    let runner = match (llm_backend, ai_timeout) {
+        (Some(backend), Some(timeout)) => {
+            WorkflowToolRunner::with_backend_timeout(executor, backend, timeout)
+        }
+        (Some(backend), None) => WorkflowToolRunner::with_backend(executor, backend),
+        (None, _) => WorkflowToolRunner::new(executor),
     };
 
     let execution = execute_workflow(workflow, input, &runner).await?;
@@ -171,6 +177,7 @@ pub async fn workflow_run(
         &executor,
         llm_backend.as_ref(),
         history::WorkflowRunContext::manual(),
+        None,
     )
     .await
 }
@@ -207,6 +214,7 @@ pub(crate) async fn run_workflow_background(
         &executor,
         llm_backend.as_ref(),
         run_context,
+        Some(BACKGROUND_AI_STEP_TIMEOUT),
     )
     .await
 }
