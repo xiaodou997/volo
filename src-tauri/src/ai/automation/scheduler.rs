@@ -16,7 +16,9 @@ use chrono::{DateTime, Utc};
 use futures_util::stream::{self, StreamExt};
 use tauri::AppHandle;
 
-use crate::ai::workflow::commands::{load_saved_workflow, run_workflow_background};
+use crate::ai::workflow::commands::{
+    history::WorkflowRunContext, load_saved_workflow, run_workflow_background,
+};
 use crate::ai::workflow::WorkflowExecutionStatus;
 use crate::error::Result;
 
@@ -117,7 +119,13 @@ async fn execute_claim(app: &AppHandle, dir: &Path, claim: DueAutomation) {
         }
     };
 
-    match run_workflow_background(app.clone(), workflow, None).await {
+    let run_context = WorkflowRunContext::automation(
+        automation_id.clone(),
+        scheduled_for,
+        retry_attempt,
+    );
+
+    match run_workflow_background(app.clone(), workflow, None, run_context).await {
         Ok(execution) => {
             if execution.status == WorkflowExecutionStatus::Failed {
                 schedule_retry(dir, &claim);
@@ -290,9 +298,14 @@ mod tests {
         );
 
         let finished_at = claim.scheduled_for + ChronoDuration::milliseconds(5);
-        let record = history::build_record(
+        let record = history::build_record_with_context(
             &persisted,
             &execution,
+            &history::WorkflowRunContext::automation(
+                claim.automation.id.clone(),
+                claim.scheduled_for,
+                claim.retry_attempt,
+            ),
             claim.scheduled_for,
             finished_at,
             5,
@@ -302,6 +315,10 @@ mod tests {
         let runs = history::list_runs(&runs_dir, Some(&persisted.id)).unwrap();
         assert_eq!(runs.len(), 1);
         assert_eq!(runs[0].workflow_id, persisted.id);
+        assert_eq!(runs[0].source, history::WorkflowRunSource::Automation);
+        assert_eq!(runs[0].automation_id.as_deref(), Some("scheduled-smoke-job"));
+        assert_eq!(runs[0].scheduled_for.as_deref(), Some("2026-09-18T12:15:00.000Z"));
+        assert_eq!(runs[0].retry_attempt, None);
         assert_eq!(runs[0].status, WorkflowExecutionStatus::Completed);
         assert_eq!(runs[0].steps.len(), 1);
         assert_eq!(runs[0].steps[0].step_id, "echo");

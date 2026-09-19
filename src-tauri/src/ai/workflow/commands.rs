@@ -62,6 +62,7 @@ async fn execute_and_record(
     input: Value,
     executor: &dyn ToolExecutor,
     llm_backend: Option<&OpenAiBackend>,
+    run_context: history::WorkflowRunContext,
 ) -> Result<WorkflowExecution> {
     let started_at = Utc::now();
     let started = Instant::now();
@@ -76,9 +77,10 @@ async fn execute_and_record(
         .elapsed()
         .as_millis()
         .min(u128::from(u64::MAX)) as u64;
-    let record = history::build_record(
+    let record = history::build_record_with_context(
         workflow,
         &execution,
+        &run_context,
         started_at,
         finished_at,
         duration_ms,
@@ -168,6 +170,7 @@ pub async fn workflow_run(
         input.unwrap_or(Value::Null),
         &executor,
         llm_backend.as_ref(),
+        history::WorkflowRunContext::manual(),
     )
     .await
 }
@@ -180,6 +183,7 @@ pub(crate) async fn run_workflow_background(
     app: AppHandle,
     workflow: Workflow,
     input: Option<Value>,
+    run_context: history::WorkflowRunContext,
 ) -> Result<WorkflowExecution> {
     validate_workflow(&workflow)?;
     let llm_backend = llm_backend_for(&app, &workflow)?;
@@ -202,6 +206,7 @@ pub(crate) async fn run_workflow_background(
         input.unwrap_or(Value::Null),
         &executor,
         llm_backend.as_ref(),
+        run_context,
     )
     .await
 }

@@ -371,6 +371,10 @@ onMounted(() => {
 
               <div class="run-meta">
                 <span>{{ formatRunStartedAt(run.startedAt) }}</span>
+                <span>{{ run.source === 'automation' ? '自动' : '手动' }}</span>
+                <span v-if="run.automationId">{{ run.automationId }}</span>
+                <span v-if="run.scheduledFor">计划 {{ formatRunStartedAt(run.scheduledFor) }}</span>
+                <span v-if="run.retryAttempt !== undefined">retry #{{ run.retryAttempt }}</span>
                 <span>{{ run.steps.length }} steps</span>
                 <span :class="['run-status', run.status]">
                   {{ run.status === 'completed' ? '完成' : '失败' }}
