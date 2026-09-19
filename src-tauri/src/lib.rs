@@ -118,6 +118,9 @@ pub fn run() {
             api::fs::fs_pick_folder,
             // 通知
             api::notification::notification_show,
+            api::notification::notification_permission_status,
+            api::notification::notification_request_permission,
+            api::notification::notification_open_settings,
             // 截图
             api::screen::screen_capture,
             api::screen::screen_capture_area,
