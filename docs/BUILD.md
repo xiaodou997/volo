@@ -80,8 +80,9 @@ pnpm tauri build
    git tag v1.4.0
    git push origin v1.4.0
    ```
-3. GitHub Actions 将自动构建三平台产物并创建 **draft** Release（带 updater 签名与 latest.json）；macOS job 固定运行在 `macos-26` arm64 runner，并只构建 `aarch64-apple-darwin`
-4. 在 GitHub Releases 页面检查产物、编辑发布说明后手动发布
+3. GitHub Actions 将自动构建三平台产物并创建 **draft** Release（带 updater 签名与 latest.json）；macOS job 固定运行在 `macos-26` arm64 runner，只构建 `aarch64-apple-darwin`，并强制 Developer ID 签名 + Apple notarization
+4. macOS job 必须通过 `codesign --verify`、`stapler validate` 与 `spctl --assess` 后，才把该构建视为可发布
+5. 在 GitHub Releases 页面检查产物、编辑发布说明后手动发布
 
 ## 自动更新（updater）
 
@@ -91,20 +92,46 @@ pnpm tauri build
 
 ## 签名配置
 
-### macOS 代码签名
+### macOS Developer ID + 公证
 
-1. 在 Apple Developer 获取证书
-2. 导入证书到钥匙串
-3. 在 `src-tauri/tauri.conf.json` 中配置:
-   ```json
-   {
-     "bundle": {
-       "macOS": {
-         "signingIdentity": "Developer ID Application: Your Name"
-       }
-     }
-   }
-   ```
+正式 macOS Release 必须同时满足：
+
+```text
+Developer ID Application 签名
+        +
+Apple notarization
+        +
+stapled ticket
+        +
+Gatekeeper assessment
+```
+
+CI 不在 `tauri.conf.json` 中硬编码证书持有人名称。Workflow 导入证书后自动发现 `Developer ID Application: ...` identity，并通过 `APPLE_SIGNING_IDENTITY` 交给 Tauri。
+
+GitHub Actions 需要以下 Repository Secrets：
+
+| Secret | 内容 |
+| --- | --- |
+| `APPLE_CERTIFICATE` | Developer ID Application 的 `.p12` 文件 Base64 |
+| `APPLE_CERTIFICATE_PASSWORD` | 导出 `.p12` 时设置的密码 |
+| `APPLE_API_ISSUER` | App Store Connect API Issuer ID |
+| `APPLE_API_KEY` | App Store Connect API Key ID |
+| `APPLE_API_KEY_P8` | 对应 `AuthKey_*.p8` 的完整文本内容 |
+
+生成 `APPLE_CERTIFICATE`：
+
+```bash
+openssl base64 -A -in DeveloperIDApplication.p12
+```
+
+`.p8` 不做 Base64；把完整内容（包括 `BEGIN PRIVATE KEY` / `END PRIVATE KEY`）保存为 `APPLE_API_KEY_P8`。
+
+仓库提供两个保护层：
+
+1. `macOS Signing Preflight`：在 PR 阶段只验证证书能导入且 `notarytool` 能使用 API Key，不创建 Release。
+2. `Release / build-macos`：缺任一 Secret 立即失败；构建后验证 `codesign`、`stapler`、`spctl`，并重新挂载 DMG 验证其中的 `Volo.app`。
+
+Updater 的 `TAURI_SIGNING_PRIVATE_KEY` 与 Apple Developer ID 是两套独立签名系统，两者都必须保留。
 
 ### Windows 代码签名
 
@@ -156,6 +183,8 @@ pnpm tauri build
 - [ ] 运行测试确保功能正常
 - [ ] 构建并测试安装包
 - [ ] macOS: 验证 `LSMinimumSystemVersion=26.0` 且主可执行文件仅含 `arm64`
+- [ ] macOS: `macOS Signing Preflight` 通过
+- [ ] macOS: Developer ID / notarization / Gatekeeper 三项验证通过
 - [ ] 创建 Git 标签
 - [ ] 推送标签触发 GitHub Actions
 - [ ] 验证所有平台的构建产物
