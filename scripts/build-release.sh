@@ -50,6 +50,15 @@ ARCH=$(uname -m)
 
 echo -e "${GREEN}Building for ${PLATFORM} (${ARCH})${NC}"
 
+# macOS 平台契约：macOS 26+ / Apple Silicon only。
+if [ "${PLATFORM}" = "Darwin" ]; then
+    if [ "${ARCH}" != "arm64" ]; then
+        echo -e "${RED}macOS releases support Apple Silicon only (arm64).${NC}"
+        exit 1
+    fi
+    export MACOSX_DEPLOYMENT_TARGET=26.0
+fi
+
 # 构建发布版本
 cargo tauri build
 
@@ -91,8 +100,9 @@ cat > "${RELEASE_DIR}/RELEASE_NOTES.md" << EOF
 ## 下载
 
 ### macOS
-- DMG: Volo_${VERSION}_x64.dmg (Intel)
-- DMG: Volo_${VERSION}_aarch64.dmg (Apple Silicon)
+- Minimum OS: macOS 26.0
+- Architecture: Apple Silicon (arm64) only
+- DMG: Volo_${VERSION}_aarch64.dmg
 
 ### Windows
 - MSI: Volo_${VERSION}_x64_en-US.msi
