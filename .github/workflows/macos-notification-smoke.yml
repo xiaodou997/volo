@@ -31,8 +31,10 @@ permissions:
 jobs:
   notification-smoke:
     name: Native notification path
-    runs-on: macos-latest
+    runs-on: macos-26
     timeout-minutes: 25
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "26.0"
 
     steps:
       - uses: actions/checkout@v6
@@ -49,6 +51,9 @@ jobs:
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Verify Apple Silicon runner
+        run: test "$(uname -m)" = "arm64"
 
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
