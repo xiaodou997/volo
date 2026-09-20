@@ -7,6 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- macOS 正式发布链改为 fail-closed 的 Developer ID + notarization：Release CI 必须导入有效 `Developer ID Application` 证书并通过 App Store Connect API Key 公证，构建后强制验证 `codesign`、stapled ticket、Gatekeeper 以及 DMG 内的 Volo.app；新增独立 Signing Preflight 验证 CI 凭据，README 不再推荐 `xattr -cr`
 - macOS 平台基线提升为 macOS 26.0+ / Apple Silicon（arm64）only：Tauri bundle 最低版本设为 26.0，macOS Release 与 notification smoke 固定到 `macos-26` arm64 runner，本地/CI 发布目标不再生成 Intel 或 Universal 包；新增真实 .app 契约检查，验证 `LSMinimumSystemVersion=26.0` 与主可执行文件仅含 `arm64`
 
 ### Fixed
