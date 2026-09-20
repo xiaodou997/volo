@@ -65,7 +65,7 @@
       "icons/icon.ico"
     ],
     "macOS": {
-      "minimumSystemVersion": "10.13"
+      "minimumSystemVersion": "26.0"
     },
     "windows": {
       "certificateThumbprint": null,
