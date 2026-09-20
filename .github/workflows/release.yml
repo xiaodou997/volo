@@ -49,8 +49,9 @@ jobs:
 
   build-macos:
     needs: verify
-    runs-on: macos-latest
+    runs-on: macos-26
     env:
+      MACOSX_DEPLOYMENT_TARGET: "26.0"
       TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
       TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
     steps:
@@ -69,6 +70,9 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Verify Apple Silicon runner
+        run: test "$(uname -m)" = "arm64"
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
@@ -86,7 +90,7 @@ jobs:
           releaseDraft: true
           prerelease: false
           # 仅 CI 生成 updater 产物（需签名密钥），本地 tauri build 不受影响
-          args: --config '{"bundle":{"createUpdaterArtifacts":true}}'
+          args: --target aarch64-apple-darwin --config '{"bundle":{"createUpdaterArtifacts":true}}'
 
   build-windows:
     needs: verify

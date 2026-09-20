@@ -1,0 +1,92 @@
+name: macOS 26 Baseline
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/macos-26-baseline.yml'
+      - '.github/workflows/release.yml'
+      - 'package.json'
+      - 'scripts/build-release.sh'
+      - 'src-tauri/tauri.conf.json'
+      - 'docs/platform/macos.md'
+      - 'docs/BUILD.md'
+      - 'README.md'
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/macos-26-baseline.yml'
+      - '.github/workflows/release.yml'
+      - 'package.json'
+      - 'scripts/build-release.sh'
+      - 'src-tauri/tauri.conf.json'
+      - 'docs/platform/macos.md'
+      - 'docs/BUILD.md'
+      - 'README.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    name: macOS 26 / arm64 contract
+    runs-on: macos-26
+    timeout-minutes: 40
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "26.0"
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Verify runner contract
+        run: |
+          test "$(uname -m)" = "arm64"
+          sw_vers
+          xcodebuild -version
+          rustc -vV
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build macOS app
+        run: pnpm tauri build --bundles app --target aarch64-apple-darwin
+
+      - name: Verify bundle platform contract
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APP="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Volo.app"
+          PLIST="$APP/Contents/Info.plist"
+
+          test -d "$APP"
+          test -f "$PLIST"
+
+          minimum_version=$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$PLIST")
+          if [[ "$minimum_version" != "26.0" ]]; then
+            echo "Expected LSMinimumSystemVersion=26.0, got $minimum_version"
+            exit 1
+          fi
+
+          executable=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$PLIST")
+          archs=$(lipo -archs "$APP/Contents/MacOS/$executable")
+          if [[ "$archs" != "arm64" ]]; then
+            echo "Expected arm64-only Mach-O, got: $archs"
+            exit 1
+          fi
+
+          echo "macOS baseline verified: minimum=26.0 arch=arm64"
