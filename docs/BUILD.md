@@ -10,17 +10,25 @@
 
 ### macOS
 
+Volo 的 macOS 发布契约是：
+
+- macOS 26.0+
+- Apple Silicon（arm64）only
+- 不生成 Intel / Universal 发布包
+
 ```bash
 # 安装依赖
 pnpm install
 
-# 构建发布版本
-pnpm tauri build
+# 构建 Apple Silicon 发布版本
+MACOSX_DEPLOYMENT_TARGET=26.0 pnpm tauri build --target aarch64-apple-darwin
 
 # 构建产物位于:
-# src-tauri/target/release/bundle/macos/Volo.app
-# src-tauri/target/release/bundle/dmg/Volo_*.dmg
+# src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Volo.app
+# src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/Volo_*.dmg
 ```
+
+也可以运行 `pnpm release:mac`；该脚本目标同样固定为 `aarch64-apple-darwin`。
 
 ### Windows
 
@@ -72,7 +80,7 @@ pnpm tauri build
    git tag v1.4.0
    git push origin v1.4.0
    ```
-3. GitHub Actions 将自动构建三平台产物并创建 **draft** Release（带 updater 签名与 latest.json）
+3. GitHub Actions 将自动构建三平台产物并创建 **draft** Release（带 updater 签名与 latest.json）；macOS job 固定运行在 `macos-26` arm64 runner，并只构建 `aarch64-apple-darwin`
 4. 在 GitHub Releases 页面检查产物、编辑发布说明后手动发布
 
 ## 自动更新（updater）
@@ -147,6 +155,7 @@ pnpm tauri build
 - [ ] 更新 CHANGELOG.md
 - [ ] 运行测试确保功能正常
 - [ ] 构建并测试安装包
+- [ ] macOS: 验证 `LSMinimumSystemVersion=26.0` 且主可执行文件仅含 `arm64`
 - [ ] 创建 Git 标签
 - [ ] 推送标签触发 GitHub Actions
 - [ ] 验证所有平台的构建产物
@@ -156,8 +165,12 @@ pnpm tauri build
 
 ### macOS 构建失败
 
-确保已安装 Xcode 命令行工具:
+macOS 发布构建必须在 Apple Silicon Mac 上执行，并以 macOS 26.0 为最低部署目标。先确认架构与工具链：
+
 ```bash
+uname -m
+# 必须输出 arm64
+
 xcode-select --install
 ```
 
