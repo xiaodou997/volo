@@ -4,6 +4,13 @@
 
 桌面效率启动器（Tauri 2 + Rust + Vue 3）：应用/文件搜索、可扩展插件系统、内置 AI 助手。
 
+## 平台支持
+
+- **macOS**：macOS 26.0+，仅支持 Apple Silicon（arm64）
+- **Windows / Linux**：保持现有发布目标
+
+macOS 不再发布 Intel（x86_64）或 Universal 包。
+
 ## 功能
 
 - **启动器**：`Alt+R` 全局呼出，应用搜索（拼音/首字母）、文件搜索、使用历史排序
@@ -16,7 +23,7 @@
 
 从 [Releases](https://github.com/xiaodou997/volo/releases) 下载对应平台安装包。
 
-**macOS 注意**：当前版本未做 Apple 开发者签名/公证，首次打开可能提示"已损坏"或"无法验证开发者"。安装后执行一次：
+**macOS 注意**：支持范围为 macOS 26.0+ / Apple Silicon。当前版本尚未完成 Apple Developer ID 签名与公证，首次打开可能提示"已损坏"或"无法验证开发者"。安装后执行一次：
 
 ```bash
 xattr -cr /Applications/Volo.app
