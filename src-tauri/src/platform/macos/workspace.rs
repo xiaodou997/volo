@@ -4,22 +4,25 @@
 //! Do not reintroduce `open`, `sips`, or other helper subprocesses here.
 
 use base64::Engine as _;
-use objc2::runtime::AnyObject;
+use block2::RcBlock;
+use objc2::runtime::{AnyObject, Bool};
 use objc2_app_kit::{
-    NSBitmapImageFileType, NSBitmapImageRep, NSBitmapImageRepPropertyKey, NSWorkspace,
+    NSBitmapImageFileType, NSBitmapImageRep, NSBitmapImageRepPropertyKey, NSImage, NSWorkspace,
 };
-use objc2_foundation::{NSArray, NSDictionary, NSString, NSURL};
+use objc2_foundation::{NSArray, NSDictionary, NSRect, NSSize, NSString, NSURL};
 use std::path::Path;
 use tracing::debug;
 
 use crate::error::{Result, VoloError};
 
+const ICON_SIZE: f64 = 64.0;
 const PNG_DATA_URI_PREFIX: &str = "data:image/png;base64,";
 
-/// 获取应用图标（返回 base64 编码的 PNG）。
+/// 获取应用图标（返回 64x64 base64 PNG）。
 ///
 /// 使用 NSWorkspace 取得 Finder 实际展示的应用图标，因此可以覆盖 asset catalog、
-/// bundle icon fallback 等现代 macOS 图标来源，不再依赖解析 .icns 后调用 sips。
+/// bundle icon fallback 等现代 macOS 图标来源；随后在 AppKit 内原生重采样为 64x64，
+/// 保持旧 sips --resampleWidth 64 路径的传输体积与调用契约。
 pub fn get_app_icon(app_path: &str) -> Result<Option<String>> {
     let path = Path::new(app_path);
 
@@ -34,15 +37,26 @@ pub fn get_app_icon(app_path: &str) -> Result<Option<String>> {
     }
 
     let workspace = NSWorkspace::sharedWorkspace();
-    let image = workspace.iconForFile(&NSString::from_str(app_path));
-    let tiff = image.TIFFRepresentation().ok_or_else(|| {
+    let source = workspace.iconForFile(&NSString::from_str(app_path));
+
+    let drawing_block: RcBlock<dyn Fn(NSRect) -> Bool> = RcBlock::new(move |rect: NSRect| {
+        source.drawInRect(rect);
+        Bool::YES
+    });
+    let resized = NSImage::imageWithSize_flipped_drawingHandler(
+        NSSize::new(ICON_SIZE, ICON_SIZE),
+        false,
+        &drawing_block,
+    );
+
+    let tiff = resized.TIFFRepresentation().ok_or_else(|| {
         VoloError::Other(format!(
-            "failed to obtain macOS application icon representation: {app_path}"
+            "failed to obtain resized macOS application icon representation: {app_path}"
         ))
     })?;
     let bitmap = NSBitmapImageRep::imageRepWithData(&tiff).ok_or_else(|| {
         VoloError::Other(format!(
-            "failed to decode macOS application icon representation: {app_path}"
+            "failed to decode resized macOS application icon representation: {app_path}"
         ))
     })?;
 

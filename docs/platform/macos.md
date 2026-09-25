@@ -44,12 +44,12 @@ Higher-level `api/` and `core/` modules must call this layer instead of importin
 
 `platform/macos/workspace.rs` is fully native on macOS 26+:
 
-- application icons come from `NSWorkspace.iconForFile` and are encoded to PNG with `NSBitmapImageRep`;
+- application icons come from `NSWorkspace.iconForFile`, are natively resampled to 64×64 with `NSImage` drawing, and are encoded to PNG with `NSBitmapImageRep`;
 - Finder reveal uses `NSWorkspace.activateFileViewerSelectingURLs` with file `NSURL`s;
 - the previous `sips` and `open -R` subprocesses are removed;
 - the native-layer guard rejects any `Command::new(...)` regression in this module.
 
-A dedicated `macos_workspace_smoke` runs on the macOS 26 arm64 runner and verifies that a real system `.app` icon is returned as a valid PNG data URI.
+A dedicated `macos_workspace_smoke` runs on the macOS 26 arm64 runner and verifies that a real system `.app` icon is returned as a valid 64×64 PNG data URI.
 
 ## Source of truth
 
