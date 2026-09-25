@@ -3,7 +3,7 @@
 //! All direct AppKit FFI belongs in this module. Callers outside `platform::macos`
 //! should use these safe wrappers instead of issuing Objective-C messages directly.
 
-use objc2::{MainThreadMarker, MainThreadOnly};
+use objc2::{AnyThread, MainThreadMarker};
 use objc2_app_kit::{NSApplication, NSImage};
 use objc2_foundation::NSData;
 
@@ -22,7 +22,7 @@ pub fn restore_application_icon() -> Result<()> {
     })?;
 
     let data = NSData::with_bytes(APP_ICON_PNG);
-    let image = NSImage::initWithData(NSImage::alloc(mtm), &data).ok_or_else(|| {
+    let image = NSImage::initWithData(NSImage::alloc(), &data).ok_or_else(|| {
         VoloError::Other("failed to decode embedded macOS application icon".into())
     })?;
     let app = NSApplication::sharedApplication(mtm);
