@@ -23,6 +23,11 @@ grep -Eq '^[[:space:]]*objc2-app-kit[[:space:]]*=' src-tauri/Cargo.toml ||
 [[ ! -f src-tauri/src/api/notification_macos.rs ]] ||
   fail "native notification FFI must live under platform/macos"
 
+if grep -Eq 'std::process::Command|tokio::process::Command|Command::new\(' \
+  src-tauri/src/platform/macos/workspace.rs; then
+  fail "macOS workspace integration must use native APIs instead of helper subprocesses"
+fi
+
 violations="$(
   find src-tauri/src -type f -name '*.rs'     ! -path 'src-tauri/src/platform/macos/*' -print0 |
     xargs -0 grep -nE       'use[[:space:]]+(objc|objc2|objc2_[a-zA-Z0-9_]*|block2)::|msg_send!|class!|sel!'       || true
