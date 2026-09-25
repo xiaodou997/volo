@@ -1,4 +1,6 @@
-//! macOS 原生通知桥（UNUserNotificationCenter）\n//!\n//! 归属于统一的 platform::macos 原生层，避免 Objective-C/AppKit 调用散落在 API 层。
+//! macOS 原生通知桥（UNUserNotificationCenter）
+//!
+//! 归属于统一的 `platform::macos` 原生层，避免 Objective-C framework 调用散落在 API 层。
 //!
 //! tauri-plugin-notification 经由 notify-rust → mac-notification-sys 投递通知，
 //! 底层是 `objc/notify.m` 的 `NSUserNotificationCenter`（旧 API），该 API 已在
