@@ -7,6 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- macOS 原生层统一到 `platform/macos/` + objc2：Dock 图标 AppKit 调用从 `core/config.rs` 收口到 `platform/macos/app.rs`，UNUserNotificationCenter 从 API 层迁到 `platform/macos/notification.rs`；移除旧 `objc = "0.2"` 直接依赖并新增 native-layer CI guard，禁止 Objective-C framework bindings 再散落回 core/api
 - macOS 正式发布链改为本地 fail-closed 的 Developer ID + notarization：Apple 证书私钥保留在开发者 Mac Keychain，App Store Connect `.p8` 保留在仓库外；新增 `release:mac:preflight / release:mac / release:mac:verify`，本地强制验证 `codesign`、stapled ticket、Gatekeeper 以及 DMG 内的 Volo.app。GitHub Actions 暂不持有 Apple 凭据、也不构建正式 macOS DMG；README 不再推荐 `xattr -cr`
 - macOS 平台基线提升为 macOS 26.0+ / Apple Silicon（arm64）only：Tauri bundle 最低版本设为 26.0，macOS Release 与 notification smoke 固定到 `macos-26` arm64 runner，本地/CI 发布目标不再生成 Intel 或 Universal 包；新增真实 .app 契约检查，验证 `LSMinimumSystemVersion=26.0` 与主可执行文件仅含 `arm64`
 
