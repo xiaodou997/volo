@@ -64,14 +64,14 @@ pub async fn notification_show(
 
 /// 跨平台发送系统通知的统一入口。
 ///
-/// macOS 走 UNUserNotificationCenter 原生桥（`notification_macos`）：
+/// macOS 走 `platform::macos::notification` 的 UNUserNotificationCenter 原生桥：
 /// notify-rust 依赖的 NSUserNotification 已被 macOS 27 移除，插件路径只会
 /// 静默失败。其他平台继续走 tauri-plugin-notification。
 pub fn show_system_notification(app: &AppHandle, title: &str, body: &str) -> Result<()> {
     #[cfg(target_os = "macos")]
     {
         let _ = app;
-        return crate::api::notification_macos::send(title, body);
+        return crate::platform::macos::notification::send(title, body);
     }
     #[cfg(not(target_os = "macos"))]
     {
@@ -137,7 +137,7 @@ fn real_permission_state(app: &AppHandle) -> Result<String> {
     #[cfg(target_os = "macos")]
     {
         let _ = app;
-        return crate::api::notification_macos::authorization_status().map(str::to_string);
+        return crate::platform::macos::notification::authorization_status().map(str::to_string);
     }
     #[cfg(not(target_os = "macos"))]
     {

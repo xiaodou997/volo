@@ -20,8 +20,25 @@ Volo's macOS platform contract starts at macOS 26.0 and does not maintain an Int
 | Minimum-runtime CI | GitHub `macos-26` arm64 |
 | Signing | Developer ID Application |
 | Notarization | Apple notary service + stapled ticket |
+| Native FFI | `objc2` framework crates under `platform/macos/` |
 | Distribution channel | Signed/notarized Direct DMG / GitHub Release |
 | App Store | Not a target while `macOSPrivateApi` is required |
+
+## Native layer contract
+
+macOS framework bindings are centralized under:
+
+```text
+src-tauri/src/platform/macos/
+├── app.rs           # AppKit / NSApplication / NSImage
+├── notification.rs  # UserNotifications
+├── workspace.rs     # workspace helpers; subprocess removal follows in #54
+└── mod.rs
+```
+
+Higher-level `api/` and `core/` modules must call this layer instead of importing Objective-C bindings directly. The legacy `objc = "0.2"` dependency is forbidden; Volo's direct macOS binding stack is `objc2` + framework crates such as `objc2-app-kit`, `objc2-foundation`, and `objc2-user-notifications`.
+
+`scripts/check-macos-native-layer.sh` enforces this boundary in the macOS 26 platform gate.
 
 ## Source of truth
 
