@@ -37,7 +37,7 @@ fi
 
 [[ -n "$identity" ]] || fail "no Developer ID Application identity found in the login keychain"
 security find-identity -v -p codesigning |
-  grep -F ""$identity"" >/dev/null ||
+  grep -F "\"$identity\"" >/dev/null ||
   fail "Developer ID identity is not currently usable: $identity"
 
 : "${APPLE_API_ISSUER:?set APPLE_API_ISSUER or define it in $ENV_FILE}"
