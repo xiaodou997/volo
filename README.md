@@ -23,7 +23,7 @@ macOS 不再发布 Intel（x86_64）或 Universal 包。
 
 从 [Releases](https://github.com/xiaodou997/volo/releases) 下载对应平台安装包。
 
-**macOS 注意**：支持范围为 macOS 26.0+ / Apple Silicon。官方 GitHub Release 的 macOS 包要求经过 **Developer ID Application 签名 + Apple 公证**，发布 CI 会验证签名、公证票据与 Gatekeeper 结果。请直接从官方 Release 安装，不再使用 `xattr -cr` 绕过系统校验。
+**macOS 注意**：支持范围为 macOS 26.0+ / Apple Silicon。官方 macOS 包必须经过 **Developer ID Application 签名 + Apple 公证**。当前正式 macOS 包由可信开发者 Mac 本地执行 release gate（codesign / notarization / stapler / Gatekeeper）后上传 GitHub Release；不再使用 `xattr -cr` 绕过系统校验。
 
 ## 开发
 
