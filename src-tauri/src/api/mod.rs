@@ -5,8 +5,6 @@ pub mod clipboard;
 pub mod database;
 pub mod fs;
 pub mod notification;
-#[cfg(target_os = "macos")]
-pub mod notification_macos;
 pub mod screen;
 pub mod shell;
 
