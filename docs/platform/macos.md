@@ -18,7 +18,9 @@ Volo's macOS platform contract starts at macOS 26.0 and does not maintain an Int
 | Universal binary | Not produced |
 | Tauri bundle minimum | `26.0` |
 | Minimum-runtime CI | GitHub `macos-26` arm64 |
-| Distribution channel | Direct DMG / GitHub Release |
+| Signing | Developer ID Application |
+| Notarization | Apple notary service + stapled ticket |
+| Distribution channel | Signed/notarized Direct DMG / GitHub Release |
 | App Store | Not a target while `macOSPrivateApi` is required |
 
 ## Source of truth
@@ -52,15 +54,43 @@ This makes the release contract explicit even if runner defaults change later.
 
 The native notification smoke also runs on `macos-26` so the minimum supported runtime is exercised directly.
 
-## Local release builds
+## Release trust contract
 
-Use an Apple Silicon Mac:
+Official macOS release artifacts are fail-closed:
 
-```bash
-MACOSX_DEPLOYMENT_TARGET=26.0 pnpm tauri build --target aarch64-apple-darwin
+```text
+Developer ID Application certificate
+  -> codesign
+  -> Apple notarization
+  -> stapled ticket
+  -> Gatekeeper assessment
+  -> draft GitHub Release
 ```
 
-The repository release helper rejects macOS release builds from an Intel host.
+The trusted release gate runs on a developer Apple Silicon Mac, not in GitHub Actions. `pnpm release:mac` validates the local Developer ID identity and App Store Connect API credentials, lets Tauri sign/notarize the arm64 build, then validates the resulting `.app` directly and again from the mounted DMG. An unsigned or unnotarized macOS artifact is not considered a releasable Volo build.
+
+The updater signature remains independent from Apple code signing:
+
+```text
+TAURI_SIGNING_PRIVATE_KEY  -> updater authenticity
+Developer ID + notarization -> macOS platform trust
+```
+
+For #52, Apple platform trust is enforced locally. GitHub Actions intentionally does not receive Apple certificate/private-key material and does not build the official macOS DMG.
+
+## Local release builds
+
+The Developer ID certificate/private key lives in macOS Keychain. The App Store Connect `.p8` stays outside the repository, with only its issuer/key/path referenced from `~/.config/volo/release.env`.
+
+```bash
+pnpm release:mac:preflight
+pnpm release:mac
+pnpm release:mac:verify
+```
+
+The release script requires an Apple Silicon Mac running macOS 26+, sets `MACOSX_DEPLOYMENT_TARGET=26.0`, auto-discovers a valid Developer ID identity when one is not explicitly configured, validates `notarytool` credentials, and emits a local verification receipt.
+
+The repository release helper rejects Intel macOS release builds.
 
 ## Modernization sequence
 
@@ -77,4 +107,4 @@ This baseline is the first step of the macOS 26+ modernization track:
  -> #58 macOS 26+ freeze
 ```
 
-Until #52 lands, the existing unsigned-release installation caveat remains in the README. Signing and notarization are deliberately a separate release-contract change.
+#52 establishes the signing/notarization release contract as a local trusted gate. Subsequent modernization work must preserve it; neither local tooling nor any future CI migration may silently fall back to ad-hoc or unsigned distribution.

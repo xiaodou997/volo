@@ -23,13 +23,7 @@ macOS 不再发布 Intel（x86_64）或 Universal 包。
 
 从 [Releases](https://github.com/xiaodou997/volo/releases) 下载对应平台安装包。
 
-**macOS 注意**：支持范围为 macOS 26.0+ / Apple Silicon。当前版本尚未完成 Apple Developer ID 签名与公证，首次打开可能提示"已损坏"或"无法验证开发者"。安装后执行一次：
-
-```bash
-xattr -cr /Applications/Volo.app
-```
-
-即可正常打开（这是清除下载隔离属性，不影响应用本身）。
+**macOS 注意**：支持范围为 macOS 26.0+ / Apple Silicon。官方 macOS 包必须经过 **Developer ID Application 签名 + Apple 公证**。当前正式 macOS 包由可信开发者 Mac 本地执行 release gate（codesign / notarization / stapler / Gatekeeper）后上传 GitHub Release；不再使用 `xattr -cr` 绕过系统校验。
 
 ## 开发
 

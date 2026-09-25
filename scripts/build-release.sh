@@ -28,6 +28,12 @@ if ! command -v cargo &> /dev/null; then
     exit 1
 fi
 
+# macOS 正式发布必须经过本地 Developer ID + notarization gate，
+# 不允许 generic release 脚本产生未验收的 macOS DMG。
+if [ "$(uname -s)" = "Darwin" ]; then
+    exec bash scripts/macos-release.sh
+fi
+
 # 清理旧的构建
 echo -e "${YELLOW}Cleaning old builds...${NC}"
 rm -rf src-tauri/target/release/bundle

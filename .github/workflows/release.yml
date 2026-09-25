@@ -47,50 +47,9 @@ jobs:
         working-directory: src-tauri
         run: cargo test --all-features
 
-  build-macos:
-    needs: verify
-    runs-on: macos-26
-    env:
-      MACOSX_DEPLOYMENT_TARGET: "26.0"
-      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v7
-        with:
-          node-version: 24
-
-      - name: Install pnpm
-        uses: pnpm/action-setup@v6
-        with:
-          version: 10
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Verify Apple Silicon runner
-        run: test "$(uname -m)" = "arm64"
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Build frontend
-        run: pnpm run build
-
-      - name: Build Tauri app
-        uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tagName: ${{ github.ref_name }}
-          releaseName: 'Volo ${{ github.ref_name }}'
-          releaseBody: 'See the assets to download this version.'
-          releaseDraft: true
-          prerelease: false
-          # 仅 CI 生成 updater 产物（需签名密钥），本地 tauri build 不受影响
-          args: --target aarch64-apple-darwin --config '{"bundle":{"createUpdaterArtifacts":true}}'
+  # macOS release artifacts are intentionally built and verified on a trusted
+  # developer Mac. Apple Developer ID / notarization credentials do not live
+  # in GitHub Actions yet. See: pnpm release:mac and docs/BUILD.md.
 
   build-windows:
     needs: verify
