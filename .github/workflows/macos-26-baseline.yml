@@ -8,6 +8,12 @@ on:
       - 'package.json'
       - 'scripts/build-release.sh'
       - 'src-tauri/tauri.conf.json'
+      - 'src-tauri/Cargo.toml'
+      - 'src-tauri/Cargo.lock'
+      - 'src-tauri/src/platform/macos/**'
+      - 'src-tauri/src/api/notification.rs'
+      - 'src-tauri/src/core/config.rs'
+      - 'scripts/check-macos-native-layer.sh'
       - 'docs/platform/macos.md'
       - 'docs/BUILD.md'
       - 'README.md'
@@ -20,6 +26,12 @@ on:
       - 'package.json'
       - 'scripts/build-release.sh'
       - 'src-tauri/tauri.conf.json'
+      - 'src-tauri/Cargo.toml'
+      - 'src-tauri/Cargo.lock'
+      - 'src-tauri/src/platform/macos/**'
+      - 'src-tauri/src/api/notification.rs'
+      - 'src-tauri/src/core/config.rs'
+      - 'scripts/check-macos-native-layer.sh'
       - 'docs/platform/macos.md'
       - 'docs/BUILD.md'
       - 'README.md'
@@ -38,6 +50,9 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
+
+      - name: Verify macOS native-layer contract
+        run: bash scripts/check-macos-native-layer.sh
 
       - name: Setup Node.js
         uses: actions/setup-node@v7
