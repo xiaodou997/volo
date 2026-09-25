@@ -17,12 +17,14 @@ static APP_ICON_PNG: &[u8] = include_bytes!("../../../icons/icon.png");
 /// accidental off-main-thread call observable instead of invoking AppKit
 /// through unchecked Objective-C messages.
 pub fn restore_application_icon() -> Result<()> {
-    let mtm = MainThreadMarker::new()
-        .ok_or_else(|| VoloError::Other("macOS AppKit icon update must run on the main thread".into()))?;
+    let mtm = MainThreadMarker::new().ok_or_else(|| {
+        VoloError::Other("macOS AppKit icon update must run on the main thread".into())
+    })?;
 
     let data = NSData::with_bytes(APP_ICON_PNG);
-    let image = NSImage::initWithData(NSImage::alloc(mtm), &data)
-        .ok_or_else(|| VoloError::Other("failed to decode embedded macOS application icon".into()))?;
+    let image = NSImage::initWithData(NSImage::alloc(mtm), &data).ok_or_else(|| {
+        VoloError::Other("failed to decode embedded macOS application icon".into())
+    })?;
     let app = NSApplication::sharedApplication(mtm);
 
     // SAFETY: `image` is a live NSImage and AppKit requires this setter on
