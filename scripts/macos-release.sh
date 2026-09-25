@@ -69,7 +69,7 @@ pnpm install --frozen-lockfile
 pnpm build
 pnpm tauri build --target aarch64-apple-darwin
 
-"$ROOT_DIR/scripts/verify-macos-release.sh"
+bash "$ROOT_DIR/scripts/verify-macos-release.sh"
 
 echo
 echo "macOS release gate passed."
