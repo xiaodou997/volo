@@ -318,39 +318,14 @@ pub fn apply_dock_icon_visibility(app: &AppHandle, visible: bool) {
         // Accessory → Regular 切换后 macOS 会把 Dock 图标还原成进程默认的 exec 图标，
         // 显式重设应用图标修复（对打包应用无影响，图标同源）
         if visible {
-            set_macos_app_icon();
+            if let Err(e) = crate::platform::macos::app::restore_application_icon() {
+                tracing::warn!("restore_application_icon failed: {}", e);
+            }
         }
     }
     #[cfg(not(target_os = "macos"))]
     {
         let _ = (app, visible);
-    }
-}
-
-/// macOS：用内嵌的 icon.png 显式设置 NSApplication 图标
-// objc 0.2 的宏内部使用了过时的 `cfg(feature = "cargo-clippy")`，在宏展开处无法消除，故允许
-#[cfg(target_os = "macos")]
-#[allow(unexpected_cfgs)]
-fn set_macos_app_icon() {
-    use objc::runtime::Object;
-    use objc::{class, msg_send, sel, sel_impl};
-
-    static PNG: &[u8] = include_bytes!("../../icons/icon.png");
-    unsafe {
-        let data: *mut Object = msg_send![class!(NSData),
-            dataWithBytes: PNG.as_ptr() as *const std::ffi::c_void
-            length: PNG.len() as u64
-        ];
-        if data.is_null() {
-            return;
-        }
-        let image: *mut Object = msg_send![class!(NSImage), alloc];
-        let image: *mut Object = msg_send![image, initWithData: data];
-        if image.is_null() {
-            return;
-        }
-        let nsapp: *mut Object = msg_send![class!(NSApplication), sharedApplication];
-        let _: () = msg_send![nsapp, setApplicationIconImage: image];
     }
 }
 
