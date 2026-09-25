@@ -67,7 +67,7 @@ Developer ID Application certificate
   -> draft GitHub Release
 ```
 
-The workflow validates Apple credentials before building and validates the resulting `.app` both directly and again from the mounted DMG. An unsigned or unnotarized macOS artifact is not considered a releasable Volo build.
+The trusted release gate runs on a developer Apple Silicon Mac, not in GitHub Actions. `pnpm release:mac` validates the local Developer ID identity and App Store Connect API credentials, lets Tauri sign/notarize the arm64 build, then validates the resulting `.app` directly and again from the mounted DMG. An unsigned or unnotarized macOS artifact is not considered a releasable Volo build.
 
 The updater signature remains independent from Apple code signing:
 
@@ -76,17 +76,21 @@ TAURI_SIGNING_PRIVATE_KEY  -> updater authenticity
 Developer ID + notarization -> macOS platform trust
 ```
 
-Both contracts must pass for an official macOS Release.
+For #52, Apple platform trust is enforced locally. GitHub Actions intentionally does not receive Apple certificate/private-key material and does not build the official macOS DMG.
 
 ## Local release builds
 
-Use an Apple Silicon Mac:
+The Developer ID certificate/private key lives in macOS Keychain. The App Store Connect `.p8` stays outside the repository, with only its issuer/key/path referenced from `~/.config/volo/release.env`.
 
 ```bash
-MACOSX_DEPLOYMENT_TARGET=26.0 pnpm tauri build --target aarch64-apple-darwin
+pnpm release:mac:preflight
+pnpm release:mac
+pnpm release:mac:verify
 ```
 
-The repository release helper rejects macOS release builds from an Intel host.
+The release script requires an Apple Silicon Mac running macOS 26+, sets `MACOSX_DEPLOYMENT_TARGET=26.0`, auto-discovers a valid Developer ID identity when one is not explicitly configured, validates `notarytool` credentials, and emits a local verification receipt.
+
+The repository release helper rejects Intel macOS release builds.
 
 ## Modernization sequence
 
@@ -103,4 +107,4 @@ This baseline is the first step of the macOS 26+ modernization track:
  -> #58 macOS 26+ freeze
 ```
 
-#52 establishes the signing/notarization release contract. Subsequent modernization work must preserve it; macOS release jobs must never silently fall back to ad-hoc or unsigned distribution.
+#52 establishes the signing/notarization release contract as a local trusted gate. Subsequent modernization work must preserve it; neither local tooling nor any future CI migration may silently fall back to ad-hoc or unsigned distribution.
