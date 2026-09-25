@@ -32,13 +32,24 @@ macOS framework bindings are centralized under:
 src-tauri/src/platform/macos/
 ├── app.rs           # AppKit / NSApplication / NSImage
 ├── notification.rs  # UserNotifications
-├── workspace.rs     # workspace helpers; subprocess removal follows in #54
+├── workspace.rs     # NSWorkspace / NSBitmapImageRep; no helper subprocesses
 └── mod.rs
 ```
 
 Higher-level `api/` and `core/` modules must call this layer instead of importing Objective-C bindings directly. The legacy `objc = "0.2"` dependency is forbidden; Volo's direct macOS binding stack is `objc2` + framework crates such as `objc2-app-kit`, `objc2-foundation`, and `objc2-user-notifications`.
 
 `scripts/check-macos-native-layer.sh` enforces this boundary in the macOS 26 platform gate.
+
+## Native workspace integration
+
+`platform/macos/workspace.rs` is fully native on macOS 26+:
+
+- application icons come from `NSWorkspace.iconForFile`, are natively resampled to 64×64 with `NSImage` drawing, and are encoded to PNG with `NSBitmapImageRep`;
+- Finder reveal uses `NSWorkspace.activateFileViewerSelectingURLs` with file `NSURL`s;
+- the previous `sips` and `open -R` subprocesses are removed;
+- the native-layer guard rejects any `Command::new(...)` regression in this module.
+
+A dedicated `macos_workspace_smoke` runs on the macOS 26 arm64 runner and verifies that a real system `.app` icon is returned as a valid 64×64 PNG data URI.
 
 ## Source of truth
 

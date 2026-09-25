@@ -1,0 +1,51 @@
+name: macOS Workspace Smoke
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/macos-workspace-smoke.yml'
+      - 'src-tauri/examples/macos_workspace_smoke.rs'
+      - 'src-tauri/src/platform/macos/workspace.rs'
+      - 'src-tauri/src/platform/macos/mod.rs'
+      - 'src-tauri/Cargo.toml'
+      - 'src-tauri/Cargo.lock'
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/macos-workspace-smoke.yml'
+      - 'src-tauri/examples/macos_workspace_smoke.rs'
+      - 'src-tauri/src/platform/macos/workspace.rs'
+      - 'src-tauri/src/platform/macos/mod.rs'
+      - 'src-tauri/Cargo.toml'
+      - 'src-tauri/Cargo.lock'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  workspace-smoke:
+    name: Native workspace path
+    runs-on: macos-26
+    timeout-minutes: 20
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "26.0"
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Verify Apple Silicon runner
+        run: |
+          test "$(uname -m)" = "arm64"
+          sw_vers
+          xcodebuild -version
+
+      - name: Run native macOS workspace smoke
+        working-directory: src-tauri
+        env:
+          RUST_BACKTRACE: '1'
+        run: cargo run --all-features --example macos_workspace_smoke
